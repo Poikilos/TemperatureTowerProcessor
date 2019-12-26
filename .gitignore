@@ -1,3 +1,6 @@
+*.blend1
+*.gcode
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
