@@ -17,6 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import os
 import sys
 import threading
 from gcodefollower import GCodeFollower
@@ -42,17 +43,25 @@ class Application():
         global gcode
         gcode = GCodeFollower(echo_callback=self.echo,
                               enable_ui_callback=self.enableUI)
+        gcode.saveDocumentationOnce()
         self.generateTimer = None
         try:
             usage()  # for debug only
-            gcode.checkSettings(allow_previous_settings=False)  # This checks the sys.argv list too.
-            # Even if it returns True, don't save settings yet, since
-            # gcode.generateTowerThread will do that.
+            gcode.checkSettings(
+                allow_previous_settings=False
+                # verbose=False
+            )  # This checks the sys.argv list too.
+            # - Leave verbose=False since the errors are below in a form
+            #   that is helpful for CLI operation.
+            # - Even if it returns True, don't save settings yet, since
+            #   gcode.generateTowerThread will do that.
         except ValueError:
             # usage()
             print("")
             print("ERROR:")
             print("- You must specify the temperature range.")
+            if not os.path.isfile(gcode._settingsPath):
+                gcode.saveSettings()
             exit(1)
         except FileNotFoundError:
             # self.echo("")
@@ -60,20 +69,24 @@ class Application():
             print("")
             print("ERROR:")
             print("'{}' does not exist.".format(gcode.getVar("template_gcode_path")))
-            if gcode.getVar("template_gcode_path") == gcode.default_path:
+            if gcode.getVar("template_gcode_path") == gcode.getVar("default_path"):
                 print("You must first slice {}:".format(GCodeFollower._towerName))
-                print("  " + downloadPageURL)
+                for thisURL in gcode._downloadPageURLs:
+                    print("  {}".format(thisURL))
             print("")
+            if not os.path.isfile(gcode._settingsPath):
+                gcode.saveSettings()
             exit(1)
         self.generateTower()
 
     def enableUI(self, enable):
         if enable:
-            print("The process completed.")
-            print("")
-            print("Stats:")
-            for k, v in gcode.stats.items():
-                print("  {}: {}".format(k, v))
+            if len(gcode.stats) > 0:
+                print("The process completed.")
+                print("")
+                print("Stats:")
+                for k, v in gcode.stats.items():
+                    print("  {}: {}".format(k, v))
         else:
             print("please wait...")
 

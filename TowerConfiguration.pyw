@@ -17,6 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import os
 import decimal
 from decimal import Decimal
 import threading
@@ -32,6 +33,7 @@ class ConfigurationFrame(ttk.Frame):
         global gcode
         gcode = GCodeFollower(echo_callback=self.echo,
                               enable_ui_callback=self.enableUI)
+        gcode.saveDocumentationOnce()
         self.generateTimer = None
         self.templateGCodePath = tk.StringVar()
         self.temperatureVs = [tk.StringVar(), tk.StringVar()]
@@ -73,6 +75,8 @@ class ConfigurationFrame(ttk.Frame):
             pass
         self.echo("")
         self.pullSettings()  # Get the path even if temperature is bad.
+        if not os.path.isfile(gcode._settingsPath):
+            gcode.saveSettings()
 
     def pushSettings(self):
         for i in range(2):
@@ -88,7 +92,10 @@ class ConfigurationFrame(ttk.Frame):
         self.templateGCodePath.set(gcode.getVar("template_gcode_path"))
 
     def echo(self, msg):
-        print("STATUS: " + msg)
+        if len(msg) > 0:
+            print("STATUS: " + msg)
+        else:
+            print(msg)
         self.statusV.set(msg)
 
     def enableUI(self, enable):

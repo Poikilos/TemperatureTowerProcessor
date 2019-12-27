@@ -21,7 +21,9 @@ See also https://github.com/poikilos/TemperatureTowerProcessor
 - A new gcode file should appear, automatically named containing the temperature range you specified. 3D print that file.
   - You will usually get an "INFO" message saying that only a certain number of levels will be present. That is expected. The top of the tower will have a hole, but that is normal. The program doesn't manipulate the gcode, other than changing and inserting temperatures and removing commands past the level you need.
 
-If you use the blend file, then after exporting you must import again, go to edit mode, click Mesh, Cleanup "merge by distance" then export again.
+## Custom Tower
+- If you use the blend file, then after exporting you must import again, go to edit mode, click Mesh, Cleanup "merge by distance" then export again.
+- Whenever you change the tower or change to a different tower, you must change settings.json to match it. To get the default settings.json file, run TowerConfiguration.pyw once (you do not have to push generate), or run TowerConfigurationCLI.py with no parameters.
 
 ## Post-Processing
 - After printing, I recommend writing the temperatures and filament type and brand on your tower using permanent marker. You may want to write each temperature on the flat side of each level, and the bottom has plenty of room to write other information.
