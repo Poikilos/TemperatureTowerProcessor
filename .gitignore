@@ -1,8 +1,10 @@
 *.blend1
 *.gcode
+*.tmp
 * is missing.txt
 settings.json
 settings *.txt
+style-check-output.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

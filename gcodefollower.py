@@ -8,6 +8,7 @@ import json
 import decimal
 from decimal import Decimal
 
+
 def get_cmd_meta(cmd):
     comment_i = cmd.find(";")
     if comment_i >= 0:
@@ -33,6 +34,7 @@ def get_cmd_meta(cmd):
             cmd_meta.append([parts[i][0]])
     return cmd_meta
 
+
 def cast_by_type_string(value, type_str):
     if value is None:
         return None
@@ -50,41 +52,176 @@ def cast_by_type_string(value, type_str):
     else:
         return value
 
+
 class GCodeFollower:
     _towerName = ("the mesh (such as STL) from Python GUI for"
                   " Configurable Temperature Tower")
-    _downloadPageURLs = ["https://www.thingiverse.com/thing:4068975",
-                         "https://github.com/poikilos/TemperatureTowerProcessor"]
-    # The old one is thing:2092820 but that is not very tall, and has some mesh issues.
+    _downloadPageURLs = [
+        "https://www.thingiverse.com/thing:4068975",
+        "https://github.com/poikilos/TemperatureTowerProcessor"
+    ]
+    # The old one is thing:2092820 but that is not very tall, and has
+    # some mesh issues.
 
     _end_retraction_flag = "filament slightly"
     _rangeNames = ["min", "max"]
-    _settingsDescriptionsPath = "settings descriptions.txt"
+    _settingsDocPath = "settings descriptions.txt"
+
+    @staticmethod
+    def getDocumentation():
+        msg = "  Slicer Compatibility:"
+        msg += ("\n  - You must put \""
+                + GCodeFollower._end_retraction_flag + "\" in"
+                " the comment on the same line as any retractions in"
+                " your end gcode that you don't want stripped off when"
+                " the top of the tower is truncated (to match"
+                " GCodeFollower._end_retraction_flag).")
+        return msg
+
+    def __init__(self, echo_callback=None, enable_ui_callback=None):
+        """
+        Change settings via setVar and self.getVar. Call
+        "getSettingsNames" to get a list of all settings. Call "help"
+        to see the documentation for each setting, preceded by the type
+        in parenthesis.
+
+        Keyword arguments:
+        echo_callback -- Whatever function you provide must accept a
+            string. It will be called whenever status should be shown.
+        enable_ui_callback -- Whatever function you provide must accept
+            a boolean. It will be called with false whenever a process
+            starts and true whenever a process ends.
+        """
+        self._verbose = False
+        self._settings = {}
+        self._settings_types = {}
+        self._settings_descriptions = {}
+        self.stats = {}
+        self._createVar("template_gcode_path", None, "str",
+                        "Look here for the source gcode of the"
+                        " temperature tower.")
+        self._createVar("default_path", "tower.gcode", "str",
+                        "Look here if template_gcode_path is not"
+                        " specified.")
+        self._createVar("level_count", 10, "int",
+                        "This is how many levels are in the source"
+                        " gcode file.")
+        self._createVar("level_height", "13.500", "Decimal",
+                        "The height of each level excluding levels"
+                        " (special_heights can override this for"
+                        " individual levels of the tower).")
+        self._createVar("special_heights[0]", "16.201", "Decimal",
+                        "This is the level of the first floor and any"
+                        " other floors that don't match level_height"
+                        " (must be consecutive).")
+        self._createVar("temperature_step", "5", "int",
+                        "Change this many degrees at each level.")
+        self._createVar("max_z_build_movement", "1.20", "Decimal",
+                        "This Z distance or less is counted as a build"
+                        " movement, and is eliminated after the tower"
+                        " is truncated (after there are no more"
+                        " temperature steps in the range and the next"
+                        " level would start).")
+        self._createVar(self.getRangeVarName("temperature", 0), None,
+                        "int", ("The first level of the temperature"
+                                " tower should be printed at this"
+                                " temperature (C)."))
+        self._createVar(self.getRangeVarName("temperature", 1), None,
+                        "int", ("After incrementing each level of the"
+                                " tower by temperature_step, finish the"
+                                " level that is this temperature then"
+                                " stop printing."))
+        self._settingsPath = "settings.json"
+        self._stop_building_msg = ("; GCodeFollower says: stop_building"
+                                   " (additional build-related codes"
+                                   " that were below will be excluded)")
+        # self._insert_msg = "; GCodeFollower."
+
+        self.max_temperature = None  # checkSettings sets this.
+        self.heights = None  # checkSettings sets this.
+        self.temperatures = None  # checkSettings sets this.
+        self.desired_temperatures = None  # checkSettings sets this.
+        #                                 # The user wants this list
+        #                                 # temperatures. It usually
+        #                                 # differs from the number of
+        #                                 # levels in the tower.
+
+        if echo_callback is not None:
+            self.echo = echo_callback
+
+        if enable_ui_callback is not None:
+            self.enableUI = enable_ui_callback
+
+        # The first (minimum) value is at Z0:
+        # self.setRangeVars("temperature", name, 240, 255)
+        # self.setRangeVars("temperature", name, 190, 210)
+        # NOTE: [Hatchbox
+        # PLA](https://www.amazon.com/gp/product/B00J0GMMP6)
+        # has the temperature 180-210, but 180 underextrudes unusably
+        # (and doesn't adhere to the bed well [even 60C black diamond]).
+
+        # G-Code reference:
+        # - Marlin (or Sprinter):
+        #   http://marlinfw.org/docs/gcode/G000-G001.html
+        self.commands = {}
+        self.params = {}
+
+        # commands with known params:
+        self.commands['fast_move'] = 'G0'  # usually without extrude
+        self.commands['move'] = 'G1'  # move (and usually extrude)
+        self.commands['set temperature and wait'] = 'M109'
+        self.commands['set fan speed'] = 'M106'
+        self.commands['set position'] = 'G92'
+        self.commands['fan off'] = 'M107'
+        # commands with no known params:
+        # - G92.1 <http://marlinfw.org/docs/gcode/G092.html>:
+        self.commands['Reset selected workspace to 0, 0, 0'] = 'G92.1'
+
+        # params:
+        self.params['fast_move'] = ['X', 'Y', 'Z', 'F', 'E']
+        # NOTE: Using G0 for moves only (not extrusions) is a convention
+        # (also, doing so helps with compatibility with devices that are
+        # not 3D printers--see
+        # http://marlinfw.org/docs/gcode/G000-G001.html).
+        self.params['move'] = ['X', 'Y', 'Z', 'F', 'E']
+        self.params['set temperature and wait'] = ['S']
+        self.params['set fan speed'] = ['S']
+        self.params['set position'] = ['E', 'X', 'Y', 'Z']
+        self.params['fan off'] = ['P']
+        self.param_names = {}
+        self.param_names["E"] = "extrude (mm)"
+        # E extrudes that many mm of filament (+/-, relative of course)
+        self.param_names["F"] = "speed (mm/minute)"
+        self.param_names["P"] = "index"  # such as fan# (default 0)
+
+        self.code_numbers = {}
+        for k, v in self.commands.items():
+            self.code_numbers[k] = Decimal(v[1:])
 
     def saveDocumentationOnce(self):
-        if not os.path.isfile(GCodeFollower._settingsDescriptionsPath):
+        if not os.path.isfile(GCodeFollower._settingsDocPath):
             self.saveDocumentation()
             print(
                 "* an explanation of settings has been written to"
-                " '{}'.".format(GCodeFollower._settingsDescriptionsPath)
+                " '{}'.".format(GCodeFollower._settingsDocPath)
             )
         else:
             print(
                 "* an explanation of settings was previously saved to"
-                " '{}'.".format(GCodeFollower._settingsDescriptionsPath)
+                " '{}'.".format(GCodeFollower._settingsDocPath)
             )
 
     def saveDocumentation(self):
-
         try:
-            with open(GCodeFollower._settingsDescriptionsPath, 'w') as outs:
+            with open(GCodeFollower._settingsDocPath, 'w') as outs:
                 self.saveDocumentationTo(outs)
         except e:
-            os.remove(GCodeFollower._settingsDescriptionsPath)
+            os.remove(GCodeFollower._settingsDocPath)
             raise e
 
     def saveDocumentationTo(self, stream):
         stream.write(self.getDocumentation() + "\n")
+
         def _saveLine(line):
             stream.write(line + "\n")
         # _saveLine("Writing settings:")
@@ -100,9 +237,10 @@ class GCodeFollower:
         # pasting your settings into https://jsonlint.com/ if you're
         # not sure, then copy from there).".format(self._settingsPath)
         # print("If you write a Python program that imports"
-              # " GCodeFollower, you can set an individual setting by"
-              # " calling the setVar method on a GCodeFollower object"
-              # " before calling calling its generateTowerThread method.")
+        #       " GCodeFollower, you can set an individual setting by"
+        #       " calling the setVar method on a GCodeFollower object"
+        #       " before calling calling its generateTower"
+        #       " method.")
         print_callback("")
         print_callback("Settings:")
         names = self.getSettingsNames()
@@ -149,18 +287,20 @@ class GCodeFollower:
 
     def getVar(self, name, prevent_exceptions=False):
         # if prevent_exceptions:
-            # result = self._settings.get(name)
-            # if result is not None:
-                # return self.castVar(name, result)
-            # else:
-                # return None
+        #     result = self._settings.get(name)
+        #     if result is not None:
+        #         return self.castVar(name, result)
+        #     else:
+        #         return None
         # return castVar(name, self._settings[name])
         if prevent_exceptions:
             result = self._settings.get(name)
             if result is None:
                 return None
-            return cast_by_type_string(result, self._settings_types[name])
-        return cast_by_type_string(self._settings[name], self._settings_types[name])
+            return cast_by_type_string(result,
+                                       self._settings_types[name])
+        return cast_by_type_string(self._settings[name],
+                                   self._settings_types[name])
 
     def getRangeVar(self, name, i):
         return self.getVar(self.getRangeVarName(name, i))
@@ -171,7 +311,8 @@ class GCodeFollower:
         self._settings_descriptions[name] = description
 
     def getListVar(self, name, i, prevent_exceptions=True):
-        return self.getVar(name + "[" + str(i) + "]", prevent_exceptions=prevent_exceptions)
+        return self.getVar(name + "[" + str(i) + "]",
+                           prevent_exceptions=prevent_exceptions)
 
     def setListVar(self, name, i, value):
         self.setVar(name + "[" + str(i) + "]", value)
@@ -181,96 +322,11 @@ class GCodeFollower:
         Get the documentation for a setting, preceded by the type in
         parenthesis.
         """
-        return "(" + self._settings_types[name] + ") " + self._settings_descriptions[name]
+        return ("(" + self._settings_types[name] + ") "
+                + self._settings_descriptions[name])
 
     def getSettingsNames(self):
         return self._settings.keys()
-
-    def __init__(self, echo_callback=None, enable_ui_callback=None):
-        """
-        Change settings via setVar and self.getVar. Call "getSettingsNames" to
-        get a list of all settings. Call "help" to see the documentation
-        for each setting, preceded by the type in parenthesis.
-
-        Keyword arguments:
-        echo_callback -- Whatever function you provide must accept a
-            string. It will be called whenever status should be shown.
-        enable_ui_callback -- Whatever function you provide must accept a
-            boolean. It will be called with false whenever a process starts
-            and true whenevere a process ends.
-        """
-        self._verbose = False
-        self._settings = {}
-        self._settings_types = {}
-        self._settings_descriptions = {}
-        self.stats = {}
-        self._createVar("template_gcode_path", None, "str", "Look here for the source gcode of the temperature tower.")
-        self._createVar("default_path", "tower.gcode", "str", "Look here if template_gcode_path is not specified.")
-        self._createVar("level_count", 10, "int", "This is how many levels are in the source gcode file.")
-        self._createVar("level_height", "13.500", "Decimal", "The height of each level excluding levels (special_heights can override this for individual levels of the tower).")
-        self._createVar("special_heights[0]", "16.201", "Decimal", "This is the level of the first floor and any other floors that don't match level_height (must be consecutive).")
-        self._createVar("temperature_step", "5", "int", "Change this many degrees at each level.")
-        self._createVar("max_z_build_movement", "1.20", "Decimal", "This Z distance or less is counted as a build movement, and is eliminated after the tower is truncated (after there are no more temperature steps in the range and the next level would start).")
-        self._createVar(self.getRangeVarName("temperature", 0), None,
-                        "int", "The first level of the temperature tower should be printed at this temperature (C).")
-        self._createVar(self.getRangeVarName("temperature", 1), None,
-                        "int", "After incrementing each level of the tower by temperature_step, finish the level that is this temperature then stop printing.")
-        self._settingsPath = "settings.json"
-        self._stop_building_msg = "; GCodeFollower says: stop_building (additional build-related codes that were below will be excluded)"
-        # self._insert_msg = "; GCodeFollower."
-
-        self.max_temperature = None  # checkSettings sets this.
-        self.heights = None  # checkSettings sets this.
-        self.temperatures = None  # checkSettings sets this.
-        self.desired_temperatures = None  # checkSettings sets this.
-                                          # The user wants this list
-                                          # temperatures. It usually
-                                          # differs from the number of
-                                          # levels in the tower.
-
-        if echo_callback is not None:
-            self.echo = echo_callback
-
-        if enable_ui_callback is not None:
-            self.enableUI = enable_ui_callback
-
-        # The first (minimum) value is at Z0:
-        # self.setRangeVars("temperature", name, 240, 255)
-        # self.setRangeVars("temperature", name, 190, 210)
-        # NOTE: [Hatchbox PLA](https://www.amazon.com/gp/product/B00J0GMMP6)
-        # has the temperature 180-210, but 180 underextrudes unusably
-        # (and doesn't adhere to the bed well [even 60C black diamond]).
-
-        # G-Code reference:
-        # - Marlin (or Sprinter): http://marlinfw.org/docs/gcode/G000-G001.html
-        self.commands = {}
-        self.params = {}
-
-        # commands with known params:
-        self.commands['move'] = 'G1'  # can also extrude
-        self.commands['set temperature and wait'] = 'M109'
-        self.commands['set fan speed'] = 'M106'
-        self.commands['set position'] = 'G92'
-        self.commands['fan off'] = 'M107'
-        # commands with no known params:
-        self.commands['Reset selected workspace to 0, 0, 0'] = 'G92.1'  # http://marlinfw.org/docs/gcode/G092.html
-
-        # params:
-        self.params['move'] = ['X', 'Y', 'Z', 'F', 'E']  # can also extrude
-        self.params['set temperature and wait'] = ['S']
-        self.params['set fan speed'] = ['S']
-        self.params['set position'] = ['E', 'X', 'Y', 'Z']
-        self.params['fan off'] = ['P']
-        self.param_names = {}
-        self.param_names["E"] = "extrude (mm)"
-        # E extrudes that many mm of filament (relative of course)
-        self.param_names["F"] = "speed (mm/minute)"
-        self.param_names["P"] = "index"  # such as fan number (default is 0)
-
-        self.code_numbers = {}
-        for k, v in self.commands.items():
-            self.code_numbers[k] = Decimal(v[1:])
-
 
     def saveSettings(self):
         serializable_settings = {}
@@ -309,17 +365,6 @@ class GCodeFollower:
         else:
             self.echo(msg)
 
-    @staticmethod
-    def getDocumentation():
-        msg = "  Slicer Compatibility:"
-        msg += ("\n  - You must put \""
-                + GCodeFollower._end_retraction_flag + "\" in"
-                " the comment on the same line as any retractions in"
-                " your end gcode that you don't want stripped off when"
-                " the top of the tower is truncated (to match"
-                " GCodeFollower._end_retraction_flag).")
-        return msg
-
     def enableUI(self, enable):
         if enable:
             print("")
@@ -329,7 +374,8 @@ class GCodeFollower:
             print("")
             print("Please wait...")
 
-    def checkSettings(self, allow_previous_settings=True, verbose=False):
+    def checkSettings(self, allow_previous_settings=True,
+                      verbose=False):
         """
         This ensures that everything in the settings dictionary is
         correct, and will do the following if not:
@@ -337,30 +383,45 @@ class GCodeFollower:
           present or not set properly.
         - raise FileNotFoundError if src_path is missing.
         """
+        getV = self.getVar
         self.error = None
 
         if (len(sys.argv) == 2) or (len(sys.argv) == 4):
             self.setVar("template_gcode_path", sys.argv[1])
             if verbose:
-                print("* You set the tower path to '{}'...".format(self.getVar("template_gcode_path")))
+                print(
+                    "* You set the tower path to '{}'...".format(
+                        getV("template_gcode_path")
+                    )
+                )
         else:
             if verbose:
                 print("")
-            self.setVar("template_gcode_path", self.getVar("default_path"))
+            self.setVar("template_gcode_path",
+                        getV("default_path"))
             if verbose:
-                print("* checking for '{}'...".format(self.getVar("template_gcode_path")))
+                print(
+                    "* checking for '{}'...".format(
+                        getV("template_gcode_path")
+                    )
+                )
                 print("")
 
-        notePath = self.getVar("template_gcode_path") + " is missing.txt"
-        if not os.path.isfile(self.getVar("template_gcode_path")):
+        notePath = getV("template_gcode_path") + " is missing.txt"
+        if not os.path.isfile(getV("template_gcode_path")):
             if verbose:
                 print("")
-                print("'{}' does not exist.".format(self.getVar("template_gcode_path")))
-            msg = "You must slice the Configurable Temperature tower from:"
+                print(
+                    "'{}' does not exist.".format(
+                        getV("template_gcode_path")
+                    )
+                )
+            msg = ("You must slice " + GCodeFollower._towerName
+                   + " from:")
             for thisURL in GCodeFollower._downloadPageURLs:
                 msg += "\n- " + thisURL
-            msg += "\nas {}".format(self.getVar("template_gcode_path"))
-            if self.getVar("template_gcode_path") == self.getVar("default_path"):
+            msg += "\nas {}".format(getV("template_gcode_path"))
+            if getV("template_gcode_path") == getV("default_path"):
                 notePathMsg = ""
                 exMessage = ""
                 try:
@@ -368,7 +429,7 @@ class GCodeFollower:
                         outs.write(msg)
                     notePathMsg = ". See 'README.md'."
                     # See '" + os.path.abspath(notePath) + "'
-                except:
+                except e:
                     exType, exMessage, exTraceback = sys.exc_info()
                     if verbose:
                         print(exMessage)
@@ -397,10 +458,14 @@ class GCodeFollower:
                 for i in range(2):
                     if self.getRangeVar("temperature", i) is None:
                         self.enableUI(True)
-                        raise ValueError(self.getRangeVarName("temperature", i) + " is missing.")
+                        raise ValueError(
+                            (self.getRangeVarName("temperature", i)
+                             + " is missing.")
+                        )
             else:
                 self.enableUI(True)
-                raise ValueError("You did not set the program parameters as script arguments.")
+                raise ValueError("You did not set the program"
+                                 " parameters as script arguments.")
 
         # Find these OR the next highest (will differ based on layer
         # height and Slic3r Z offset setting; which may also be
@@ -417,12 +482,13 @@ class GCodeFollower:
         # self.heights = [0, 16.4, 30.16, 43.6, 57.04]
         self.heights = []  # ALWAYS must start with level 0 at 0.00
         total_height = Decimal("0.000")
-        for i in range(self.getVar("level_count")):
-            this_level_height = self.getVar("level_height")
+        for i in range(getV("level_count")):
+            this_level_height = getV("level_height")
             if (special_heights is not None) and (i < len(special_heights)):
                 if special_heights[i] is not None:
                     # if verbose:
-                        # print("special_heights[" + str(i) + "]: " + type(special_heights[i]).__name__)
+                    #     print("special_heights[" + str(i) + "]: "
+                    #           + type(special_heights[i]).__name__)
                     this_level_height = special_heights[i]
             self.heights.append(total_height)
             total_height += this_level_height
@@ -438,60 +504,66 @@ class GCodeFollower:
                 )
 
         self.max_temperature = None  # This is set automatically
-                                     # according to height below.
+        #                            # according to height below.
         this_temperature = self.getRangeVar("temperature", 0)
         # if verbose:
-            # print("this_temperature: " + type(this_temperature).__name__)
+        #     print("this_temperature: "
+        #           + type(this_temperature).__name__)
         # if this_temperature is None:
-            # self.enableUI(True)
-            # raise ValueError("The settings value '"
-                             # + self.getRangeVarName("temperature", 0)
-                             # + "' is missing (you must set this).")
+        #     self.enableUI(True)
+        #     raise ValueError("The settings value '"
+        #                      + self.getRangeVarName("temperature", 0)
+        #                      + "' is missing (you must set this).")
         # if self.getRangeVar("temperature", 1) is None:
-            # self.enableUI(True)
-            # raise ValueError("The settings value '"
-                             # + self.getRangeVarName("temperature", 1)
-                             # + "' is missing (you must set this).")
-        l = 0
+        #     self.enableUI(True)
+        #     raise ValueError("The settings value '"
+        #                      + self.getRangeVarName("temperature", 1)
+        #                      + "' is missing (you must set this).")
+        height_i = 0
         # height = Decimal("0.00")
         self.temperatures = []
         self.desired_temperatures = []
         while True:
-            if l < len(self.heights):
-                # height = self.heights[l]
-               # if verbose:
-                   # print("* adding level {} ({} C) at"
-                          # " {}mm".format(l, this_temperature, height))
+            if height_i < len(self.heights):
+                # height = self.heights[height_i]
+                # if verbose:
+                #    print("* adding level {} ({} C) at"
+                #           " {}mm".format(height_i, this_temperature, height))
                 self.temperatures.append(this_temperature)
                 self.max_temperature = this_temperature
             self.desired_temperatures.append(this_temperature)
             # if verbose:
-                # print("temperature_step: "
-                      # + type(self.getVar("temperature_step")).__name__)
-            this_temperature += self.getVar("temperature_step")
+            #     print("temperature_step: "
+            #           + type(getV("temperature_step")).__name__)
+            this_temperature += getV("temperature_step")
             if this_temperature > self.getRangeVar("temperature", 1):
-                this_temperature -= self.getVar("temperature_step")
+                this_temperature -= getV("temperature_step")
                 break
-            l += 1
+            height_i += 1
         this_temperature = None
         self.echo("")
-        self.echo("level:       " + "".join(["{:<9}".format(i) for i in range(len(self.temperatures))]))
-        self.echo("temperature: " + "".join(["{:<9}".format(t) for t in self.temperatures]))
-        self.echo("height:     " + "".join(["{:>8.3f}mm".format(t) for t in self.heights]))
+        ls = ["{:<9}".format(i) for i in range(len(self.temperatures))]
+        self.echo("level:       " + "".join(ls))
+        ts = ["{:<9}".format(t) for t in self.temperatures]
+        self.echo("temperature: " + "".join(ts))
+        hs = ["{:>8.3f}mm".format(t) for t in self.heights]
+        self.echo("height:     " + "".join(hs))
         self.echo("")
         if self.max_temperature < self.getRangeVar("temperature", 1):
-            self.echo("INFO: Only {} floors will be present since the"
-                      " number of desired temperatures is greater than"
-                      " the available {} floors in the model"
-                      " (counting by {} C).".format(len(self.temperatures),
-                                                    len(self.heights),
-                                                    self.getVar("temperature_step")))
+            self.echo(
+                "INFO: Only {} floors will be present since the"
+                " number of desired temperatures is greater than"
+                " the available {} floors in the model"
+                " (counting by {} C).".format(len(self.temperatures),
+                                              len(self.heights),
+                                              getV("temperature_step"))
+            )
         elif len(self.temperatures) < len(self.heights):
             self.echo("INFO: Only {} floors will be present since the"
                       " temperature range (counting by {}) has fewer"
                       " steps than the {}-floor tower"
                       " model.".format(len(self.temperatures),
-                                       self.getVar("temperature_step"),
+                                       getV("temperature_step"),
                                        len(self.heights)))
         return True
 
@@ -531,21 +603,49 @@ class GCodeFollower:
         self.stats = {}  # values known by current OR previous lines
         self.stats_lines = {}  # what line# provides the value of a stat
 
-    def generateTowerThread(self):
+    def generateTower(self):
+        getV = self.getVar
+        getS = self.getStat
+        setS = self.setStat
+        modS = self._changeStat
+        lvl = 0
+
+        def getL():
+            return getS("level")
+
+        def modL(delta, line_number):
+            global lvl
+            self._changeStat("level", delta, line_number)
+            lvl = getL()
+
+        def setL(value, line_number):
+            global lvl
+            setS("level", value, line_number)
+            lvl = value
+
+        cn = self.code_numbers
+        heights = self.heights
+        if self.heights is None:
+            raise RuntimeError("Heights were not calculated. You must"
+                               " run checkSettings before"
+                               " generateTower.")
         echoP = self._echo_progress
         start_temperature_found = False
         stw_cmd = self.commands['set temperature and wait']
         stw_param0 = self.params['set temperature and wait'][0]
+        tmprs = self.temperatures
 
         self.clearStats()
-        self.setStat("height", Decimal("0.00"), -1)
+        setS("height", Decimal("0.00"), -1)
 
-        self.setStat("level", 0, -1)
-        self.setStat("new_line_count", 0, -1)
-        self.setStat("stop_building", False, -1)
+        setL(0, -1)
+        setS("new_line_count", 0, -1)
+        setS("stop_building", False, -1)
         last_height = None
-        something_printed = False  # Tells the program whether "actual" printing ever occurred yet.
-        deltas = {}  # difference from previous (only for keys in current line)
+        something_printed = False  # Tells the program whether "actual"
+        #                          # printing ever occurred yet.
+        deltas = {}  # difference from previous (only for keys in
+        #            # current line)
         given_values = None  # ONLY values from the current line
         previous_values = {}
         previous_dst_line = None
@@ -556,64 +656,76 @@ class GCodeFollower:
                 self.enableUI(True)
                 return False
             else:
-                print("* saving '" + self._settingsPath +"'...")
+                print("* saving '" + self._settingsPath + "'...")
                 self.saveSettings()
         except Exception as e:
             self.echo(str(e))
             raise e
-        tmp_path = self.getVar("template_gcode_path") + ".tmp"
+        tmp_path = getV("template_gcode_path") + ".tmp"
         dst_path = (self.getRangeString("temperature") + "_"
-                         + self.getVar("template_gcode_path"))
-        # os.path.splitext(self.getVar("template_gcode_path"))[0]
+                    + getV("template_gcode_path"))
+        # os.path.splitext(getV("template_gcode_path"))[0]
         # + "_" + range + ".gcode"
-        level_t_debug_shown = {}
-        level_next_debug_shown = {}
-        level_no_next_debug_shown = {}
-        level_wait_next_debug_shown = {}
-        bytes_total = os.path.getsize(self.getVar("template_gcode_path"))
+        dant_shown = {}  # debug accessing new temperature
+        dnlh_shown = {}  # debug next level height
+        dnnh_shown = {}  # debug no next height
+        dwfnh_shown = {}  # debug wait for height before changing level
+        bytes_total = os.path.getsize(getV("template_gcode_path"))
         bytes_count = 0
-        self.setStat("progress", "0%", -1)
+        setS("progress", "0%", -1)
         prev_line_len = 0
-        with open(self.getVar("template_gcode_path")) as ins:
+        with open(getV("template_gcode_path")) as ins:
             with open(tmp_path, 'w') as outs:
                 line_number = 0
                 for original_line in ins:
                     bytes_count += prev_line_len
-                    self.setStat("progress", str(round(bytes_count/round(bytes_total/100))) + "%", line_number)
+                    setS(
+                        "progress",
+                        (str(round(bytes_count/round(bytes_total/100)))
+                         + "%"),
+                        line_number
+                    )
                     prev_line_len = len(original_line)
-                    next_level_height = None
-                    next_level_temperature = None
-                    if self.getStat("level") + 1 < len(self.heights):
-                        next_level_height = self.heights[self.getStat("level") + 1]
+                    next_l_h = None  # next level's height
+                    next_l_t = None  # next level's temperature
+                    if getS("level") + 1 < len(heights):
+                        next_l_h = heights[getS("level") + 1]
                         if self._verbose:
-                            l_str = str(self.getStat("level") + 1)
-                            if level_next_debug_shown.get(l_str) is not True:
-                                echoP("* INFO: The next height (for level {}) is {}.".format(l_str, next_level_height))
-                                level_next_debug_shown[l_str] = True
+                            l_str = str(getS("level") + 1)
+                            if dnlh_shown.get(l_str) is not True:
+                                echoP("* INFO: The next height (for"
+                                      " level {}) is"
+                                      " {}.".format(l_str, next_l_h))
+                                dnlh_shown[l_str] = True
                     else:
                         if self._verbose:
-                            l_str = str(self.getStat("level") + 1)
-                            if level_no_next_debug_shown.get(l_str) is not True:
-                                echoP("* INFO: There is no height for the next level ({}).".format(l_str))
-                                level_no_next_debug_shown[l_str] = True
-                    if self.getStat("level") + 1 < len(self.temperatures):
-                        next_level_temperature = self.temperatures[self.getStat("level") + 1]
+                            l_str = str(getS("level") + 1)
+                            if dnnh_shown.get(l_str) is not True:
+                                echoP("* INFO: There is no height for"
+                                      " the next level"
+                                      " ({}).".format(l_str))
+                                dnnh_shown[l_str] = True
+                    if getS("level") + 1 < len(tmprs):
+                        next_l_t = tmprs[getS("level") + 1]
                         if self._verbose:
-                            l_str = str(self.getStat("level") + 1)
-                            if level_t_debug_shown.get(l_str) is not True:
-                                echoP("* INFO: A temperature for level {} is being accessed.".format(l_str))
-                                level_t_debug_shown[l_str] = True
+                            l_str = str(getS("level") + 1)
+                            if dant_shown.get(l_str) is not True:
+                                echoP("* INFO: A temperature for level"
+                                      " {} is being"
+                                      " accessed.".format(l_str))
+                                dant_shown[l_str] = True
                     if given_values is not None:
                         for k, v in given_values.items():
                             previous_values[k] = v
                     given_values = {}  # This is ONLY for the current
-                                       # command. Other known (past)
-                                       # values are in stats.
+                    #                  # command. Other known (past)
+                    #                  # values are in stats.
                     line_number += 1
                     line = original_line.rstrip()
                     double_blank = False
                     if previous_dst_line is not None:
-                        if (len(previous_dst_line) == 0) and (len(line) == 0):
+                        if ((len(previous_dst_line) == 0) and
+                                (len(line) == 0)):
                             double_blank = True
                     previous_src_line = line
                     cmd_meta = get_cmd_meta(line)
@@ -626,135 +738,171 @@ class GCodeFollower:
                         for i in range(1, len(cmd_meta)):
                             part_indices[cmd_meta[i][0]] = i
                             if len(cmd_meta[i]) < 2:
-                                continue  # no value; just a letter param
+                                continue  # no value; just letter param
                             elif len(cmd_meta[i]) > 2:
-                                echoP("Line {}: WARNING: extra param (this should never happen) in '{}'".format(line_number, line))
+                                echoP("Line {}: WARNING: extra param"
+                                      " (this should never happen) in"
+                                      " '{}'".format(line_number, line))
                             try:
-                                self.setStat(cmd_meta[i][0], Decimal(cmd_meta[i][1]), line_number)
-                                given_values[cmd_meta[i][0]] = Decimal(cmd_meta[i][1])
+                                setS(cmd_meta[i][0],
+                                     Decimal(cmd_meta[i][1]),
+                                     line_number)
+                                given_values[cmd_meta[i][0]] = Decimal(
+                                    cmd_meta[i][1]
+                                )
                             except decimal.InvalidOperation as e:
                                 if type(e) == decimal.ConversionSyntax:
-                                    echoP("Line {}: ERROR: Bad conversion syntax: '{}'".format(line_number, cmd_meta[i][1]))
+                                    echoP(
+                                        "Line {}: ERROR: Bad"
+                                        " conversion syntax:"
+                                        " '{}'".format(line_number,
+                                                       cmd_meta[i][1])
+                                    )
                                 else:
-                                    echoP("Line {}: ERROR: Bad Decimal (InvalidOperation): '{}'".format(line_number, cmd_meta[i][1]))
+                                    echoP(
+                                        "Line {}: ERROR: Bad Decimal"
+                                        " (InvalidOperation):"
+                                        " '{}'".format(line_number,
+                                                       cmd_meta[i][1])
+                                    )
                                 echoP("  cmd_meta: {}".format(cmd_meta))
                         for k, v in given_values.items():
                             previous_v = previous_values.get(k)
                             if previous_v is not None:
                                 deltas[k] = v - previous_v
-                        if self.getStat("stop_building"):
+                        if getS("stop_building"):
                             # echoP(str(cmd_meta))
                             if (len(cmd_meta) == 2):
                                 if (cmd_meta[1][0] == "F"):
-                                    # It ONLY has F param, so it is not end gcode
+                                    # It ONLY has F param, so it is not
+                                    # end gcode.
                                     would_move_for_build = True
-                                # elif given_values.get("F") is not None:
-                                    # echoP("Line {}: ERROR: Keeping"
-                                          # " unnecessary"
-                                          # " F in:"
-                                          # " {}".format(line_number,
-                                                       # cmd_meta))
+                                # elif given_values.get("F")
+                                # is not None:
+                                #     echoP("Line {}: ERROR: Keeping"
+                                #           " unnecessary"
+                                #           " F in:"
+                                #           " {}".format(line_number,
+                                #                        cmd_meta))
                             # else:
-                                # echoP("Line {}: ERROR: Keeping"
-                                      # " necessary F"
-                                      # " in: {}".format(line_number,
-                                                       # cmd_meta))
+                            #     echoP("Line {}: ERROR: Keeping"
+                            #           " necessary F"
+                            #           " in: {}".format(line_number,
+                            #                            cmd_meta))
                     if cmd_meta is None:
-                        if (not self.getStat("stop_building")) or (not double_blank):
-                            outs.write(original_line.rstrip("\n").rstrip("\r") + "\n")
+                        if ((not getS("stop_building")) or
+                                (not double_blank)):
+                            outs.write(
+                                (original_line.rstrip("\n").rstrip("\r")
+                                 + "\n")
+                            )
                             previous_dst_line = line
                         continue
                     code_number = int(cmd_meta[0][1])
                     if cmd_meta[0][0] == "G":
                         if given_values.get('E') is not None:
                             would_extrude = True
-                            # if (comment is not None) or (GCodeFollower._end_retraction_flag in comment):
+                            # if (comment is not None) or
+                            # (GCodeFollower._end_retraction_flag in
+                            # comment):
                             if GCodeFollower._end_retraction_flag in line:
                                 if Decimal(given_values.get('E')) < 0:
-                                    # NOTE: Otherwise includes retractions in end gcode
+                                    # NOTE: Otherwise includes
+                                    # retractions in end gcode
                                     # (negative # after E)
                                     would_extrude = False
-                            # Otherwise, discard BOTH negative and positive
-                            # filament feeding after tower is finished.
-                        # NOTE: homing is still allowed (values without params
-                        # are not in given_values).
+                            # Otherwise, discard BOTH negative and
+                            # positive filament feeding after tower is
+                            # finished.
+                        # NOTE: homing is still allowed (values without
+                        # params are not in given_values).
                         if given_values.get('X') is not None:
                             if (given_values.get('Y') is not None):
-                                # echoP("NOT HOMING: " + str(given_values))
                                 would_move_for_build = True
                             elif (given_values.get('Z') is not None):
-                                # echoP("NOT HOMING: " + str(given_values))
                                 would_move_for_build = True
                             elif given_values.get('X') != Decimal("0.00"):
-                                # echoP("NOT HOMING: " + str(given_values))
                                 would_move_for_build = True
                             else:
                                 # it is homing X, so it isn't building
-                                # echoP("HOMING: " + str(given_values))
                                 pass
                         # elif given_values.get('Y') is not None:
-                            # # NOTE: This can't help but eliminate moving the
-                            # # (Prusa-style) bed forward for easy removal in end
-                            # # gcode.
+                            # # NOTE: This can't help but eliminate
+                            # # moving the (Prusa-style) bed forward
+                            # # for easy removal in end gcode.
                             # would_move_for_build = True
                         delta_z = deltas.get("Z")
                         if (delta_z is not None):
-                            if (abs(delta_z) <= self.getVar("max_z_build_movement")):
-                                # This is too small to be a necessary move
-                                # (it is probably moving to the next layer)
+                            if (abs(delta_z) <= getV("max_z_build_movement")):
+                                # This is too small to be a necessary
+                                # move (it is probably moving to the
+                                # next layer)
                                 would_move_for_build = True
-                            elif self.getStat("stop_building") and not would_move_for_build:
+                            elif (getS("stop_building") and
+                                    not would_move_for_build):
                                 echoP("Line {}: Moving from {} (from"
                                       " line {}) to {} would"
                                       " move a lot {}"
                                       " (keeping '{}').".format(
                                         line_number,
-                                        self.getStat("Z"),
+                                        getS("Z"),
                                         self.getStatLine("Z"),
                                         given_values.get("Z"),
                                         abs(deltas.get("Z")),
                                         line
                                       ))
-                        elif self.getStat("stop_building") and (self.getStat("Z") is None):
+                        elif (getS("stop_building") and
+                                (getS("Z") is None)):
                             echoP("Line {}: ERROR: No recorded z delta"
                                   "but build is"
                                   " over.".format(line_number))
 
-                        would_build = would_extrude or would_move_for_build
+                        would_build = (would_extrude or
+                                       would_move_for_build)
 
                         if (code_number == 1) or (code_number == 0):
-                            if self.getStat("stop_building"):
+                            if getS("stop_building"):
                                 if would_build:
                                     # NOTE: this removes any retraction
-                                    # (negative value after 'E' param) in stop
-                                    # gcode.
+                                    # (negative value after 'E' param)
+                                    # in stop gcode.
                                     continue
                                 else:
-                                    echoP("Line {}: WARNING: Allowing '{}'"
-                                              " after stop (z delta {})".format(
-                                                line_number, line, deltas.get("Z")
-                                              ))
+                                    echoP(
+                                        "Line {}: WARNING: Allowing"
+                                        " '{}' after stop (z"
+                                        " delta {})".format(
+                                            line_number,
+                                            line,
+                                            deltas.get("Z")
+                                        )
+                                    )
                             outs.write(line + "\n")
-                            previous_dst_line = line  # It's just a movement,
-                                                      # so don't edit it.
-                                                      # Insert temperature after
-                                                      # it if it is a new level
-                                                      # (below).
+                            previous_dst_line = line  # It's just a
+                            #                         # movement, so
+                            #                         # don't edit it.
+                            #                         # Insert
+                            #                         # temperature
+                            #                         # after it if it
+                            #                         # is a new level
+                            #                         # (below).
                             given_z = given_values.get("Z")
                             z_index = part_indices.get("Z")
                             if z_index is None:
                                 continue
                             if len(cmd_meta[z_index]) == 1:
-                                self.setStat("height", Decimal("0.00"), line_number)
-                                last_height = self.getStat("height")
-                                self.setStat("level", 0, line_number)
+                                setS("height", Decimal("0.00"),
+                                     line_number)
+                                last_height = getS("height")
+                                setL(0, line_number)
                                 # echoP("Line {}: Missing value after"
-                                      # " '{}'".format(
-                                    # line_number,
-                                    # cmd_meta[1][0])
+                                #       " '{}'".format(
+                                #     line_number,
+                                #     cmd_meta[1][0])
                                 # )
                                 # continue
-                                # if len(cmd_meta[1]) == 1:  # already checked
+                                # if len(cmd_meta[1]) == 1:  # already
+                                #                            # checked
                                 echoP("Line {}: INFO: Homing was"
                                       " detected so"
                                       " level & height were changed"
@@ -763,23 +911,31 @@ class GCodeFollower:
                             else:
                                 # NOTE: already determined to have "Z"
                                 #   (See `continue` further up.)
-                                # NOTE: len(cmd_meta[z_index]) cannot be 0 since
-                                #   it is obtained using split.
-                                self.setStat("height", Decimal(cmd_meta[z_index][1]), line_number)
+                                # NOTE: len(cmd_meta[z_index]) cannot be
+                                #   0 since it is obtained using split.
+                                setS("height",
+                                     Decimal(cmd_meta[z_index][1]),
+                                     line_number)
                                 # if self._verbose:
-                                    # echoP(
-                                        # "* INFO: Z is now {} due to"
-                                        # " {}".format(
-                                            # cmd_meta[z_index][1],
-                                            # cmd_meta
-                                        # )
-                                    # )
-                                last_height = self.getStat("height")
-                                if next_level_height is None:
-                                    if not self.getStat("stop_building"):
-                                        self.setStat("stop_building", True, line_number)
-                                        outs.write(self._stop_building_msg + "\n")
-                                        if next_level_temperature is not None:
+                                #     echoP(
+                                #         "* INFO: Z is now {} due to"
+                                #         " {}".format(
+                                #             cmd_meta[z_index][1],
+                                #             cmd_meta
+                                #         )
+                                #     )
+                                last_height = getS("height")
+                                lvl = getS("level")
+                                h = getS("height")
+                                if next_l_h is None:
+                                    if not getS("stop_building"):
+                                        setS("stop_building", True,
+                                             line_number)
+                                        outs.write(
+                                            (self._stop_building_msg
+                                             + "\n")
+                                        )
+                                        if next_l_t is not None:
                                             echoP(
                                                 "* Line {}: The tower"
                                                 " ends (there is no"
@@ -790,9 +946,9 @@ class GCodeFollower:
                                                 " temperature beyond {}"
                                                 .format(
                                                     line_number,
-                                                    self.getStat("level"),
-                                                    self.getStat("height"),
-                                                    self.temperatures[self.getStat("level")]
+                                                    getL(),
+                                                    h,
+                                                    tmprs[getL()]
                                                 )
                                             )
                                         else:
@@ -807,23 +963,27 @@ class GCodeFollower:
                                                 " beyond {}"
                                                 .format(
                                                     line_number,
-                                                    self.getStat("level"),
-                                                    self.getStat("height"),
-                                                    self.temperatures[self.getStat("level")]
+                                                    getL(),
+                                                    h,
+                                                    tmprs[getL()]
                                                 )
                                             )
                                         echoP("  (Future extrusion"
-                                                  " will be"
-                                                  " suppressed)")
+                                              " will be"
+                                              " suppressed)")
 
                                         continue
-                                elif self.getStat("height") >= next_level_height:
-                                    # This code can still be reached if not
-                                    # would_extrude:
-                                    if next_level_temperature is None:
-                                        if not self.getStat("stop_building"):
-                                            self.setStat("stop_building", True, line_number)
-                                            outs.write(self._stop_building_msg + "\n")
+                                elif h >= next_l_h:
+                                    # This code can still be reached if
+                                    # not would_extrude:
+                                    if next_l_t is None:
+                                        if not getS("stop_building"):
+                                            setS("stop_building", True,
+                                                 line_number)
+                                            outs.write(
+                                                (self._stop_building_msg
+                                                 + "\n")
+                                            )
                                             echoP(
                                                 "* Line {}: The tower"
                                                 " will be truncated"
@@ -832,15 +992,16 @@ class GCodeFollower:
                                                 " (no level beyond {})"
                                                 " at {}".format(
                                                     line_number,
-                                                    self.getStat("level"),
-                                                    self.getStat("height")
+                                                    getL(),
+                                                    h
                                                 )
                                             )
                                             echoP("  (Future extrusion"
                                                   " will be"
                                                   " suppressed)")
                                         continue
-                                    if not start_temperature_found: # self.getStat("level") == 0
+                                    if not start_temperature_found:
+                                        # setL("level", 0, line_number)
                                         echoP(
                                             "Line {}: INFO: Splicing"
                                             " temperature at {} will be"
@@ -851,13 +1012,13 @@ class GCodeFollower:
                                             " presumably start"
                                             " gcode.".format(
                                                 line_number,
-                                                self.getStat("height"),
+                                                h,
                                                 stw_cmd,
-                                                self.getStat("level")
+                                                getL()
                                             )
                                         )
-                                    elif ((len(self.heights) > self.getStat("level") + 2)
-                                          and (self.getStat("height") > self.heights[self.getStat("level") + 2])):
+                                    elif ((len(heights) > lvl + 2) and
+                                            (h > heights[lvl + 2])):
                                         echoP(
                                             "Line {}: WARNING: Splicing"
                                             " temperature at height"
@@ -869,35 +1030,38 @@ class GCodeFollower:
                                             " be a wait or purge"
                                             " position)".format(
                                                 line_number,
-                                                self.getStat("height"),
+                                                h,
                                             )
                                         )
                                     else:
-                                        # if self.getStat("level") + 1 < len(self.temperatures):
-                                        # already checked (see this clause and
-                                        # the previous if clause).
-                                        self._changeStat("level", 1, line_number)
+                                        # if lvl + 1 < len(tmprs):
+                                        # already checked (see this
+                                        # clause and the previous `if`
+                                        # clause).
+                                        modL(1, line_number)
                                         if self._verbose:
-                                            echoP("Line {}: INFO: "
+                                            echoP(
+                                                "Line {}: INFO: "
                                                 " **temperature** at"
-                                                " height {} will become"
-                                                " {} (for level"
-                                                " {})".format(
+                                                " height {} will"
+                                                " become {} (for"
+                                                " level {})".format(
                                                     line_number,
-                                                    self.getStat("height"),
-                                                    self.temperatures[self.getStat("level")],
-                                                    self.getStat("level")
+                                                    h,
+                                                    tmprs[getL()],
+                                                    getL()
                                                 )
                                             )
                                         new_line = "{} {}{:.2f}".format(
                                             stw_cmd,
                                             stw_param0,
-                                            self.temperatures[self.getStat("level")]
+                                            tmprs[getL()]
                                         )
                                         # echoP(new_line)
                                         outs.write(new_line + "\n")
                                         previous_dst_line = new_line
-                                        self.stats["new_line_count"] += 1
+                                        modS("new_line_count", 1,
+                                             line_number)
                                         echoP(
                                             "Line {}: Inserted:"
                                             " {}".format(
@@ -905,24 +1069,37 @@ class GCodeFollower:
                                                 new_line
                                             )
                                         )
-                                        echoP("- after '{}'".format(line))
+                                        echoP("- after"
+                                              " '{}'".format(line))
                                         echoP("- new line #: {}".format(
-                                            line_number+self.stats["new_line_count"]
+                                            (line_number
+                                             + getS("new_line_count"))
                                         ))
                                 else:
                                     if self._verbose:
-                                        l_str = str(self.getStat("level") + 1)
-                                        if level_wait_next_debug_shown.get(l_str) is not True:
-                                            # echoP("* INFO: The next height (for level {}) of {} has not yet been reached at {}.".format(l_str, next_level_height, self.getStat("height")))
-                                            level_wait_next_debug_shown[l_str] = True
+                                        l_str = str(getL() + 1)
+                                        if dwfnh_shown.get(l_str) is not True:
+                                            # echoP(
+                                            #     "* INFO: The next"
+                                            #     " height (for level"
+                                            #     " {}) of {} has not"
+                                            #     " yet been reached"
+                                            #     " at {}.".format(
+                                            #         l_str,
+                                            #         next_l_h,
+                                            #         h
+                                            #     )
+                                            # )
+                                            dwfnh_shown[l_str] = True
 
                         else:  # some other G code
-                            if self.getStat("stop_building"):
+                            if getS("stop_building"):
                                 if would_build:
                                     continue
                                 else:
                                     if code_number == 91:
-                                        echoP("Line {}: INFO:"
+                                        echoP(
+                                            "Line {}: INFO:"
                                             " Allowing '{}'"
                                             " after stop".format(
                                                 line_number,
@@ -941,28 +1118,44 @@ class GCodeFollower:
                             previous_dst_line = line
 
                     elif cmd_meta[0][0] == "M":
-                        if line[0:5] == stw_cmd + " ":  # set temperature & wait
+                        if line[0:5] == stw_cmd + " ":  # set
+                            #                           # temperature &
+                            #                           # wait
                             # (extruder temperature)
-                            # d for decimal integer format (with no decimals):
-                            new_line = "{} {}{:d}".format(stw_cmd, stw_param0,
-                                                          self.temperatures[self.getStat("level")])
+                            # d for decimal integer format (with no
+                            # decimals):
+                            new_line = "{} {}{:d}".format(stw_cmd,
+                                                          stw_param0,
+                                                          tmprs[getL()])
                             if start_temperature_found:
-                                echoP("Line {}: Extra temperature command at {}: {}".format(line_number, self.getStat("height"), line)
-                                      + "\n- changed to: {}...".format(new_line))
+                                echoP("Line {}: Extra temperature"
+                                      " command at {}:"
+                                      " {}".format(line_number,
+                                                   getS("height"), line)
+                                      + "\n- changed to:" + new_line
+                                      + "...")
                             else:
-                                echoP("Line {}: Initial temperature command at {}: {}".format(line_number, self.getStat("height"), line)
-                                      + "\n- changed to: {}...".format(new_line))
+                                echoP(
+                                    "Line {}: Initial temperature"
+                                    " command at {}:"
+                                    " {}".format(line_number,
+                                                 getS("height"),
+                                                 line)
+                                    + "\n- changed to:" + new_line
+                                    + "..."
+                                )
                             outs.write(new_line + "\n")
                             previous_dst_line = line
-                            # if self.getStat("level") == 0:
-                                # if self.getStat("level") + 1 < len(self.temperatures):
-                                    # self._changeStat("level", 1, line_number)
-                                    # # echoP("Level {} is "
-                                            # "next.".format(
-                                              # self.getStat("level"))
-                                            # )
+                            # if getL() == 0:
+                            #     if getL() + 1 < len(tmprs):
+                            #         modL(1, line_number)
+                            #         # echoP("Level {} is "
+                            #         #       "next.".format(
+                            #         #         getL())
+                            #         #       )
                             start_temperature_found = True
-                        elif self.getStat("stop_building") and (code_number == self.code_numbers['set fan speed']):
+                        elif (getS("stop_building") and
+                                (code_number == cn['set fan speed'])):
                             # Do not keep the fan speed line.
                             continue
                         else:
@@ -973,11 +1166,11 @@ class GCodeFollower:
                         previous_dst_line = line
                         pass
                         # echoP("Unknown command:"
-                              # " {}".format(cmd_meta[0][0]))
+                        #       " {}".format(cmd_meta[0][0]))
         shutil.move(tmp_path, dst_path)
         self.echo("100% (done; saved {})".format(dst_path))
         bytes_count = bytes_total
-        self.setStat("progress", "100%", line_number)
+        setS("progress", "100%", line_number)
 
         # @G1 Z16.40
         # +M104 S240
@@ -989,6 +1182,7 @@ class GCodeFollower:
         # +M104 S255
         self.enableUI(True)
         return True
+
 
 if __name__ == "__main__":
     print("This is a module. To use it, you must import it into your "

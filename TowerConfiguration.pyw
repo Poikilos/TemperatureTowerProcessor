@@ -41,62 +41,92 @@ class ConfigurationFrame(ttk.Frame):
         ttk.Frame.__init__(self, parent)
         self.pack(fill=tk.BOTH, expand=True)
         row = 0
-        ttk.Label(self, text="Template G-Code Path:").grid(column=0, row=row, sticky=tk.E)
-        ttk.Entry(self, width=35, textvariable=self.templateGCodePath).grid(column=1, columnspan=2, row=row, sticky=tk.E)
+        self.tgcLabel = ttk.Label(self, text="Template G-Code Path:")
+        self.tgcLabel.grid(column=0, row=row, sticky=tk.E)
+        self.tgcEntry = ttk.Entry(self, width=35,
+                                  textvariable=self.templateGCodePath)
+        self.tgcEntry.grid(column=1, columnspan=2, row=row, sticky=tk.E)
         row += 1
-        ttk.Label(self, text="Minimum Temperature (C):").grid(column=0, row=row, sticky=tk.E)
-        ttk.Entry(self, width=35, textvariable=self.temperatureVs[0]).grid(column=1, columnspan=2, row=row, sticky=tk.E)
+        self.minLabel = ttk.Label(self, text="Minimum Temperature (C):")
+        self.minLabel.grid(column=0, row=row, sticky=tk.E)
+        self.minEntry = ttk.Entry(self, width=35,
+                                  textvariable=self.temperatureVs[0])
+        self.minEntry.grid(column=1, columnspan=2, row=row, sticky=tk.E)
         row += 1
-        ttk.Label(self, text="Maximum Temperature (C)").grid(column=0, row=row, sticky=tk.E)
-        ttk.Entry(self, width=35, textvariable=self.temperatureVs[1]).grid(column=1, columnspan=2, row=row, sticky=tk.E)
+        self.maxLabel = ttk.Label(self, text="Maximum Temperature (C)")
+        self.maxLabel.grid(column=0, row=row, sticky=tk.E)
+        self.maxEntry = ttk.Entry(self, width=35,
+                                  textvariable=self.temperatureVs[1])
+        self.maxEntry.grid(column=1, columnspan=2, row=row, sticky=tk.E)
         row += 1
         ttk.Label(self, text="").grid(column=0, row=row, sticky=tk.E)
         # See Mitch McMabers' answer
-        # at https://stackoverflow.com/questions/4011354/create-resizable-multiline-tkinter-ttk-labels-with-word-wrap
-        # ttk.Label(self, width=25, wraplength=72, anchor=tk.W, justify=tk.LEFT, textvariable=self.statusV, state="readonly").grid(column=0, columnspan=3, row=row, sticky=tk.E)
-        ttk.Label(self, width=72, wraplength=600, anchor=tk.W, textvariable=self.statusV, state="readonly").grid(column=0, columnspan=3, row=row, sticky=tk.W)
+        # at <https://stackoverflow.com/questions/4011354/\
+        # create-resizable-multiline-tkinter-ttk-labels-with-word-wrap>
+        # self.statusLabel = ttk.Label(self, width=25, wraplength=72,
+        #                              anchor=tk.W, justify=tk.LEFT,
+        #                              textvariable=self.statusV,
+        #                              state="readonly")
+        # self.statusLabel.grid(column=0, columnspan=3, row=row,
+        #                       sticky=tk.E)
+        self.statusLabel = ttk.Label(self, width=72, wraplength=600,
+                                     anchor=tk.W,
+                                     textvariable=self.statusV,
+                                     state="readonly")
+        self.statusLabel.grid(column=0, columnspan=3, row=row,
+                              sticky=tk.W)
         row += 1
-        self.generateButton = ttk.Button(self, text="Generate", command=self.generateTower)
+        self.generateButton = ttk.Button(self, text="Generate",
+                                         command=self.generateTower)
         self.generateButton.grid(column=1, row=row, sticky=tk.E)
-        ttk.Button(self, text="Exit", command=root.destroy).grid(column=2, row=row, sticky=tk.E)
+        self.exitButton = ttk.Button(self, text="Exit",
+                                     command=root.destroy)
+        self.exitButton.grid(column=2, row=row, sticky=tk.E)
         for child in self.winfo_children():
             child.grid_configure(padx=6, pady=3)
         # (Urban & Murach, 2016, p. 515)
+        self.checkSettingsAndShow()
+        self.pullSettings()  # Get the path even if temperature is bad.
+        if not os.path.isfile(gcode._settingsPath):
+            gcode.saveSettings()
+        self.statusV.set("")
 
+    def checkSettingsAndShow(self):
         try:
-            gcode.checkSettings()
+            return gcode.checkSettings()
             # Even if it returns True, don't save settings yet since
-            # gcode.generateTowerThread will do that.
+            # gcode.generateTower will do that.
         except ValueError:
-            self.echo("The temperatures must be integers or Generate cannot proceed.")
+            self.echo("The temperatures must be integers or Generate"
+                      " cannot proceed.")
         except FileNotFoundError:
             # self.echo("")
             # checkSettings already called echo_callback in this case.
             pass
-        self.echo("")
-        self.pullSettings()  # Get the path even if temperature is bad.
-        if not os.path.isfile(gcode._settingsPath):
-            gcode.saveSettings()
+        return False
 
     def pushSettings(self):
         for i in range(2):
-            gcode.setRangeVar("temperature", i, self.temperatureVs[i].get())
-        gcode.setVar("template_gcode_path", self.templateGCodePath.get())
+            gcode.setRangeVar("temperature", i,
+                              self.temperatureVs[i].get())
+        gcode.setVar("template_gcode_path",
+                     self.templateGCodePath.get())
 
     def pullSettings(self):
         for i in range(2):
             v = gcode.getRangeVar("temperature", i)
             if v is not None:
                 self.temperatureVs[i].set(v)
-        # print("got template_gcode_path: " + gcode.getVar("template_gcode_path"))
+        # print("got template_gcode_path: "
+        #       + gcode.getVar("template_gcode_path"))
         self.templateGCodePath.set(gcode.getVar("template_gcode_path"))
 
     def echo(self, msg):
         if len(msg) > 0:
             print("STATUS: " + msg)
+            self.statusV.set(msg)
         else:
             print(msg)
-        self.statusV.set(msg)
 
     def enableUI(self, enable):
         if enable:
@@ -106,12 +136,14 @@ class ConfigurationFrame(ttk.Frame):
 
     def generateTower(self):
         self.pushSettings()
-        gcode.enableUI(False)  # generateTowerThread will call
-                               # enable_ui_callback(true).
+        gcode.enableUI(False)  # generateTower will call
+        #                      # enable_ui_callback(true).
         # Start a thread, so that events related to enableUI(False) can
         # occur before processing.
-        self.generateTimer = threading.Timer(0.01, gcode.generateTowerThread)
-        self.generateTimer.start()
+        # gcode._verbose = True
+        if self.checkSettingsAndShow():
+            self.generateTimer = threading.Timer(0.01, gcode.generateTower)
+            self.generateTimer.start()
 
 
 def main():
@@ -121,6 +153,7 @@ def main():
     ConfigurationFrame(root)
     root.mainloop()
     # (Urban & Murach, 2016, p. 515)
+
 
 if __name__ == "__main__":
     main()
