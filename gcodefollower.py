@@ -162,6 +162,7 @@ class GCodeFollower:
             boolean. It will be called with false whenever a process starts
             and true whenevere a process ends.
         """
+        self._verbose = False
         self._settings = {}
         self._settings_types = {}
         self._settings_descriptions = {}
@@ -328,7 +329,7 @@ class GCodeFollower:
             this_level_height = self.getVar("level_height")
             if (special_heights is not None) and (i < len(special_heights)):
                 if special_heights[i] is not None:
-                    print("special_heights[" + str(i) + "]: " + type(special_heights[i]).__name__)
+                    # print("special_heights[" + str(i) + "]: " + type(special_heights[i]).__name__)
                     this_level_height = special_heights[i]
             self.heights.append(total_height)
             total_height += this_level_height
@@ -345,7 +346,7 @@ class GCodeFollower:
         self.max_temperature = None  # This is set automatically
                                      # according to height below.
         this_temperature = self.getRangeVar("temperature", 0)
-        print("this_temperature: " + type(this_temperature).__name__)
+        # print("this_temperature: " + type(this_temperature).__name__)
         # if this_temperature is None:
             # raise ValueError("The settings value '"
                              # + self.getRangeVarName("temperature", 0)
@@ -444,14 +445,22 @@ class GCodeFollower:
           operation.
         - ...getStatLine so I can provide accurate error output.
         """
+        if not self.getStat("stop_building"):
+            if name == "E":
+                total_name = "total_" + name + "_before_stop_building"
+                prev_total = self.stats.get(total_name)
+                if prev_total is not None:
+                    self.stats[total_name] += Decimal(value)
+                else:
+                    self.stats[total_name] = Decimal(value)
         self.stats[name] = value
         self.stats_lines[name] = line_number
 
     def getStat(self, name):
         return self.stats.get(name)
 
-    def _changeStat(self, name, delta):
-        self.setStat(name, self.getStat(name) + delta)
+    def _changeStat(self, name, delta, line_number):
+        self.setStat(name, self.getStat(name) + delta, line_number)
 
     def getStatLine(self, name):
         return self.stats_lines.get(name)
@@ -490,6 +499,10 @@ class GCodeFollower:
                          + self.getVar("template_gcode_path"))
         # os.path.splitext(self.getVar("template_gcode_path"))[0]
         # + "_" + range + ".gcode"
+        level_t_debug_shown = {}
+        level_next_debug_shown = {}
+        level_no_next_debug_shown = {}
+        level_wait_next_debug_shown = {}
 
         with open(self.getVar("template_gcode_path")) as ins:
             with open(tmp_path, 'w') as outs:
@@ -499,8 +512,24 @@ class GCodeFollower:
                     next_level_temperature = None
                     if self.getStat("level") + 1 < len(self.heights):
                         next_level_height = self.heights[self.getStat("level") + 1]
+                        if self._verbose:
+                            l_str = str(self.getStat("level") + 1)
+                            if level_next_debug_shown.get(l_str) is not True:
+                                print("* INFO: The next height (for level {}) is {}.".format(l_str, next_level_height))
+                                level_next_debug_shown[l_str] = True
+                    else:
+                        if self._verbose:
+                            l_str = str(self.getStat("level") + 1)
+                            if level_no_next_debug_shown.get(l_str) is not True:
+                                print("* INFO: There is no height for the next level ({}).".format(l_str))
+                                level_no_next_debug_shown[l_str] = True
                     if self.getStat("level") + 1 < len(self.temperatures):
                         next_level_temperature = self.temperatures[self.getStat("level") + 1]
+                        if self._verbose:
+                            l_str = str(self.getStat("level") + 1)
+                            if level_t_debug_shown.get(l_str) is not True:
+                                print("* INFO: A temperature for level {} is being accessed.".format(l_str))
+                                level_t_debug_shown[l_str] = True
                     if given_values is not None:
                         for k, v in given_values.items():
                             previous_values[k] = v
@@ -600,7 +629,7 @@ class GCodeFollower:
 
                         would_build = would_extrude or would_move_for_build
 
-                        if code_number == 1:
+                        if (code_number == 1) or (code_number == 0):
                             if self.getStat("stop_building"):
                                 if would_build:
                                     # NOTE: this removes any retraction
@@ -643,6 +672,8 @@ class GCodeFollower:
                                 # NOTE: len(cmd_meta[z_index]) cannot be 0 since
                                 #   it is obtained using split.
                                 self.setStat("height", Decimal(cmd_meta[z_index][1]), line_number)
+                                # if self._verbose:
+                                    # print("* INFO: Z is now {} due to {}".format(cmd_meta[z_index][1], cmd_meta))
                                 last_height = self.getStat("height")
                                 if next_level_height is None:
                                     if not self.getStat("stop_building"):
@@ -730,17 +761,18 @@ class GCodeFollower:
                                         # if self.getStat("level") + 1 < len(self.temperatures):
                                         # already checked (see this clause and
                                         # the previous if clause).
-                                        self._changeStat("level", 1)
-                                        # print("Line {}: INFO: "
-                                                  # " **temperature** at height"
-                                                  # " {} will become {}"
-                                                  # " (for level {})".format(
-                                                    # line_number,
-                                                    # self.getStat("height"),
-                                                    # self.temperatures[self.getStat("level")],
-                                                    # self.getStat("level")
-                                                  # )
-                                        # )
+                                        self._changeStat("level", 1, line_number)
+                                        if self._verbose:
+                                            print("Line {}: INFO: "
+                                                  " **temperature** at height"
+                                                  " {} will become {}"
+                                                  " (for level {})".format(
+                                                    line_number,
+                                                    self.getStat("height"),
+                                                    self.temperatures[self.getStat("level")],
+                                                    self.getStat("level")
+                                                  )
+                                            )
                                         new_line = "{} {}{:.2f}".format(
                                             stw_cmd,
                                             stw_param0,
@@ -758,6 +790,12 @@ class GCodeFollower:
                                         print("- new line #: {}".format(
                                             line_number+self.stats["new_line_count"]
                                         ))
+                                else:
+                                    if self._verbose:
+                                        l_str = str(self.getStat("level") + 1)
+                                        if level_wait_next_debug_shown.get(l_str) is not True:
+                                            # print("* INFO: The next height (for level {}) of {} has not yet been reached at {}.".format(l_str, next_level_height, self.getStat("height")))
+                                            level_wait_next_debug_shown[l_str] = True
 
                         else:  # some other G code
                             if self.getStat("stop_building"):
@@ -793,7 +831,7 @@ class GCodeFollower:
                             previous_dst_line = line
                             # if self.getStat("level") == 0:
                                 # if self.getStat("level") + 1 < len(self.temperatures):
-                                    # self._changeStat("level", 1)
+                                    # self._changeStat("level", 1, line_number)
                                     # # print("Level {} is next.".format(self.getStat("level")))
                             start_temperature_found = True
                         elif self.getStat("stop_building") and (code_number == self.code_numbers['set fan speed']):
