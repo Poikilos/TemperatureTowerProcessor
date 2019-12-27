@@ -3,6 +3,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [git] - 2019-12-27
+(Poikilos)
+### Changed
+- Write "settings descriptions.txt" on first run.
+- Always generate settings.json (even if operation cannot continue).
+- Show percentage complete in console and GUI.
 
 ## [git] - 2019-12-26
 (Poikilos)
