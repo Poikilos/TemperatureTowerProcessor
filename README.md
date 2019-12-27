@@ -1,6 +1,8 @@
 # Python GUI for Variable-Height Configurable Temperature Tower
 https://www.thingiverse.com/thing:4068975 by Poikilos
 
+See also https://github.com/poikilos/TemperatureTowerProcessor
+
 ## Differences from 3dMakernoob's Version
 - The mesh is now cleaner, and has separated parts including separate end cap for use with Blender's array modifier.
   - Position and count of vertices at top and bottom now match.
