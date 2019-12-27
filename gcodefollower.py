@@ -509,7 +509,7 @@ class GCodeFollower:
         """
         if not self.getStat("stop_building"):
             if name == "E":
-                total_name = "total_" + name + "_before_stop_building"
+                total_name = "net_" + name + "_before_stop_building"
                 prev_total = self.stats.get(total_name)
                 if prev_total is not None:
                     self.stats[total_name] += Decimal(value)
