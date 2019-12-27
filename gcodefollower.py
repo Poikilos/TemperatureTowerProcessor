@@ -36,6 +36,8 @@ def get_cmd_meta(cmd):
 def cast_by_type_string(value, type_str):
     if value is None:
         return None
+    elif value == "":
+        return None
     # NOTE: to reverse this, you'd have to use type(var).__name__
     if type_str == "int":
         return int(value)
@@ -49,12 +51,13 @@ def cast_by_type_string(value, type_str):
         return value
 
 class GCodeFollower:
-    _towerName = "the STL from Python GUI for Configurable Temperature Tower"
+    _towerName = ("the mesh (such as STL) from Python GUI for"
+                  " Configurable Temperature Tower")
     _downloadPageURLs = ["https://www.thingiverse.com/thing:4068975",
                          "https://github.com/poikilos/TemperatureTowerProcessor"]
     # The old one is thing:2092820 but that is not very tall, and has some mesh issues.
 
-    _end_retraction_flag = "retract filament slightly"
+    _end_retraction_flag = "filament slightly"
     _rangeNames = ["min", "max"]
 
     def printSettingsDocumentation(self):
@@ -179,6 +182,8 @@ class GCodeFollower:
         self._createVar(self.getRangeVarName("temperature", 1), None,
                         "int", "After incrementing each level of the tower by temperature_step, finish the level that is this temperature then stop printing.")
         self._settingsPath = "settings.json"
+        self._stop_building_msg = "; GCodeFollower says: stop_building (additional build-related codes that were below will be excluded)"
+        # self._insert_msg = "; GCodeFollower."
 
         self.max_temperature = None  # checkSettings sets this.
         self.heights = None  # checkSettings sets this.
@@ -267,7 +272,8 @@ class GCodeFollower:
     @staticmethod
     def getDocumentation():
         msg = "  Slicer Compatibility:"
-        msg += ("\n  - You must put \"retract filament slightly\" in"
+        msg += ("\n  - You must put \""
+                + GCodeFollower._end_retraction_flag + "\" in"
                 " the comment on the same line as any retractions in"
                 " your end gcode that you don't want stripped off when"
                 " the top of the tower is truncated (to match"
@@ -283,7 +289,7 @@ class GCodeFollower:
             print("")
             print("Please wait...")
 
-    def checkSettings(self):
+    def checkSettings(self, allow_previous_settings=True):
         """
         This ensures that everything in the settings dictionary is
         correct, and will do the following if not:
@@ -301,6 +307,45 @@ class GCodeFollower:
             self.setVar("template_gcode_path", self.default_path)
             print("* checking for '{}'...".format(self.getVar("template_gcode_path")))
             print("")
+
+        notePath = self.getVar("template_gcode_path") + " is missing.txt"
+        if not os.path.isfile(self.getVar("template_gcode_path")):
+            print("")
+            print("'{}' does not exist.".format(self.getVar("template_gcode_path")))
+            msg = (
+                "You must slice the Configurable Temperature tower from"
+                " {} as {}\n".format(GCodeFollower._downloadPageURLs,
+                                     self.getVar("template_gcode_path"))
+            )
+            if self.getVar("template_gcode_path") == self.default_path:
+                notePathMsg = ""
+                exMessage = ""
+                try:
+                    with open(notePath, 'w') as outs:
+                        outs.write(msg)
+                    notePathMsg = " See 'README.md'."
+                    # See '" + os.path.abspath(notePath) + "'
+                except:
+                    exType, exMessage, exTraceback = sys.exc_info()
+                    print(exMessage)
+                    notePathMsg = (" Writing '" +
+                                   os.path.abspath(notePath)
+                                   + "' failed: " + exMessage)
+                self.echo("You must first slice "
+                          + GCodeFollower._towerName
+                          + " ({}) as '".format(
+                                GCodeFollower._downloadPageURLs
+                            )
+                          + self.getVar("template_gcode_path") + "'"
+                          + notePathMsg)
+            print("")
+            self.enableUI(True)
+            raise FileNotFoundError(self.getVar("template_gcode_path"))
+            return False
+        else:
+            if os.path.isfile(notePath):
+                os.remove(notePath)
+
         if len(sys.argv) == 4:
             self.setRangeVar("temperature", 0, sys.argv[2])
             self.setRangeVar("temperature", 1, sys.argv[3])
@@ -308,7 +353,14 @@ class GCodeFollower:
             self.setRangeVar("temperature", 0, sys.argv[1])
             self.setRangeVar("temperature", 1, sys.argv[2])
         else:
-            raise ValueError("You did not set the program parameters as script arguments.")
+            if allow_previous_settings:
+                for i in range(2):
+                    if self.getRangeVar("temperature", i) is None:
+                        self.enableUI(True)
+                        raise ValueError(self.getRangeVarName("temperature", i) + " is missing.")
+            else:
+                self.enableUI(True)
+                raise ValueError("You did not set the program parameters as script arguments.")
 
         # Find these OR the next highest (will differ based on layer
         # height and Slic3r Z offset setting; which may also be
@@ -348,10 +400,12 @@ class GCodeFollower:
         this_temperature = self.getRangeVar("temperature", 0)
         # print("this_temperature: " + type(this_temperature).__name__)
         # if this_temperature is None:
+            # self.enableUI(True)
             # raise ValueError("The settings value '"
                              # + self.getRangeVarName("temperature", 0)
                              # + "' is missing (you must set this).")
         # if self.getRangeVar("temperature", 1) is None:
+            # self.enableUI(True)
             # raise ValueError("The settings value '"
                              # + self.getRangeVarName("temperature", 1)
                              # + "' is missing (you must set this).")
@@ -393,44 +447,6 @@ class GCodeFollower:
                       " model.".format(len(self.temperatures),
                                        self.getVar("temperature_step"),
                                        len(self.heights)))
-
-
-        notePath = self.getVar("template_gcode_path") + " is missing.txt"
-        if not os.path.isfile(self.getVar("template_gcode_path")):
-            print("")
-            print("'{}' does not exist.".format(self.getVar("template_gcode_path")))
-            msg = (
-                "You must slice the Configurable Temperature tower from"
-                " {} as {}\n".format(GCodeFollower._downloadPageURLs,
-                                     self.getVar("template_gcode_path"))
-            )
-            if self.getVar("template_gcode_path") == self.default_path:
-                notePathMsg = ""
-                exMessage = ""
-                try:
-                    with open(notePath, 'w') as outs:
-                        outs.write(msg)
-                    notePathMsg = " See 'README.md'."
-                    # See '" + os.path.abspath(notePath) + "'
-                except:
-                    exType, exMessage, exTraceback = sys.exc_info()
-                    print(exMessage)
-                    notePathMsg = (" Writing '" +
-                                   os.path.abspath(notePath)
-                                   + "' failed: " + exMessage)
-                self.echo("You must first slice "
-                          + GCodeFollower._towerName
-                          + " ({}) as '".format(
-                                GCodeFollower._downloadPageURLs
-                            )
-                          + self.getVar("template_gcode_path") + "'"
-                          + notePathMsg)
-            print("")
-            raise FileNotFoundError(self.getVar("template_gcode_path"))
-            return False
-        else:
-            if os.path.isfile(notePath):
-                os.remove(notePath)
         return True
 
     def getRangeString(self, name):
@@ -488,12 +504,16 @@ class GCodeFollower:
         previous_dst_line = None
         previous_src_line = None
 
-        if not self.checkSettings():
-            self.enableUI(True)
-            return False
-        else:
-            print("* saving '" + self._settingsPath +"'...")
-            self.saveSettings()
+        try:
+            if not self.checkSettings():
+                self.enableUI(True)
+                return False
+            else:
+                print("* saving '" + self._settingsPath +"'...")
+                self.saveSettings()
+        except Exception as e:
+            self.echo(str(e))
+            raise e
         tmp_path = self.getVar("template_gcode_path") + ".tmp"
         dst_path = (self.getRangeString("temperature") + "_"
                          + self.getVar("template_gcode_path"))
@@ -591,7 +611,7 @@ class GCodeFollower:
                     if cmd_meta[0][0] == "G":
                         if given_values.get('E') is not None:
                             would_extrude = True
-                            #if (comment is not None) or ("retract filament slightly" in comment):
+                            # if (comment is not None) or (GCodeFollower._end_retraction_flag in comment):
                             if GCodeFollower._end_retraction_flag in line:
                                 if Decimal(given_values.get('E')) < 0:
                                     # NOTE: Otherwise includes retractions in end gcode
@@ -602,7 +622,19 @@ class GCodeFollower:
                         # NOTE: homing is still allowed (values without params
                         # are not in given_values).
                         if given_values.get('X') is not None:
-                            would_move_for_build = True
+                            if (given_values.get('Y') is not None):
+                                # print("NOT HOMING: " + str(given_values))
+                                would_move_for_build = True
+                            elif (given_values.get('Z') is not None):
+                                # print("NOT HOMING: " + str(given_values))
+                                would_move_for_build = True
+                            elif given_values.get('X') != Decimal("0.00"):
+                                # print("NOT HOMING: " + str(given_values))
+                                would_move_for_build = True
+                            else:
+                                # it is homing X, so it isn't building
+                                # print("HOMING: " + str(given_values))
+                                pass
                         # elif given_values.get('Y') is not None:
                             # # NOTE: This can't help but eliminate moving the
                             # # (Prusa-style) bed forward for easy removal in end
@@ -664,7 +696,7 @@ class GCodeFollower:
                                 self.echo("Line {}: INFO: Homing was"
                                       " detected so"
                                       " level & height were changed"
-                                      " to 0.")
+                                      " to 0...")
                                 continue
                             else:
                                 # NOTE: already determined to have "Z"
@@ -678,6 +710,7 @@ class GCodeFollower:
                                 if next_level_height is None:
                                     if not self.getStat("stop_building"):
                                         self.setStat("stop_building", True, line_number)
+                                        outs.write(self._stop_building_msg + "\n")
                                         if next_level_temperature is not None:
                                             print("* Line {}: The tower ends"
                                                   " (there is no level beyond"
@@ -716,6 +749,7 @@ class GCodeFollower:
                                     if next_level_temperature is None:
                                         if not self.getStat("stop_building"):
                                             self.setStat("stop_building", True, line_number)
+                                            outs.write(self._stop_building_msg + "\n")
                                             print("* Line {}: The tower will be"
                                                   " truncated since there is no"
                                                   " new temperature available"
@@ -823,10 +857,10 @@ class GCodeFollower:
                                                           self.temperatures[self.getStat("level")])
                             if start_temperature_found:
                                 self.echo("Line {}: Extra temperature command at {}: {}".format(line_number, self.getStat("height"), line)
-                                          + "\n- changed to: {}".format(new_line))
+                                          + "\n- changed to: {}...".format(new_line))
                             else:
                                 self.echo("Line {}: Initial temperature command at {}: {}".format(line_number, self.getStat("height"), line)
-                                          + "\n- changed to: {}".format(new_line))
+                                          + "\n- changed to: {}...".format(new_line))
                             outs.write(new_line + "\n")
                             previous_dst_line = line
                             # if self.getStat("level") == 0:
@@ -846,7 +880,7 @@ class GCodeFollower:
                         pass
                         # print("Unknown command: {}".format(cmd_meta[0][0]))
         shutil.move(tmp_path, dst_path)
-        self.echo("* saved {}".format(dst_path))
+        self.echo("* 100% (done; saved {})".format(dst_path))
         # @G1 Z16.40
         # +M104 S240
         # @G1 Z30.16

@@ -42,10 +42,10 @@ class ConfigurationFrame(ttk.Frame):
         ttk.Label(self, text="Template G-Code Path:").grid(column=0, row=row, sticky=tk.E)
         ttk.Entry(self, width=35, textvariable=self.templateGCodePath).grid(column=1, columnspan=2, row=row, sticky=tk.E)
         row += 1
-        ttk.Label(self, text="Start Temperature (C):").grid(column=0, row=row, sticky=tk.E)
+        ttk.Label(self, text="Minimum Temperature (C):").grid(column=0, row=row, sticky=tk.E)
         ttk.Entry(self, width=35, textvariable=self.temperatureVs[0]).grid(column=1, columnspan=2, row=row, sticky=tk.E)
         row += 1
-        ttk.Label(self, text="Stop Temperature (C)").grid(column=0, row=row, sticky=tk.E)
+        ttk.Label(self, text="Maximum Temperature (C)").grid(column=0, row=row, sticky=tk.E)
         ttk.Entry(self, width=35, textvariable=self.temperatureVs[1]).grid(column=1, columnspan=2, row=row, sticky=tk.E)
         row += 1
         ttk.Label(self, text="").grid(column=0, row=row, sticky=tk.E)
@@ -63,28 +63,32 @@ class ConfigurationFrame(ttk.Frame):
 
         try:
             gcode.checkSettings()
-            self.pullSettings()
             # Even if it returns True, don't save settings yet since
             # gcode.generateTowerThread will do that.
         except ValueError:
-            self.echo("The temperatures must be integers.")
+            self.echo("The temperatures must be integers or Generate cannot proceed.")
         except FileNotFoundError:
             # self.echo("")
             # checkSettings already called echo_callback in this case.
             pass
+        self.echo("")
+        self.pullSettings()  # Get the path even if temperature is bad.
 
     def pushSettings(self):
-        gcode.setVar("min_temperature", self.temperatureVs[0].get())
-        gcode.setVar("max_temperature", self.temperatureVs[1].get())
+        for i in range(2):
+            gcode.setRangeVar("temperature", i, self.temperatureVs[i].get())
         gcode.setVar("template_gcode_path", self.templateGCodePath.get())
 
     def pullSettings(self):
-        self.temperatureVs[0].set(gcode.getVar("min_temperature"))
-        self.temperatureVs[1].set(gcode.getVar("max_temperature"))
+        for i in range(2):
+            v = gcode.getRangeVar("temperature", i)
+            if v is not None:
+                self.temperatureVs[i].set(v)
+        # print("got template_gcode_path: " + gcode.getVar("template_gcode_path"))
         self.templateGCodePath.set(gcode.getVar("template_gcode_path"))
 
     def echo(self, msg):
-        print(msg)
+        print("STATUS: " + msg)
         self.statusV.set(msg)
 
     def enableUI(self, enable):

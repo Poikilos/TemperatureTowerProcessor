@@ -45,7 +45,7 @@ class Application():
         self.generateTimer = None
         try:
             usage()  # for debug only
-            gcode.checkSettings()  # This checks the sys.argv list too.
+            gcode.checkSettings(allow_previous_settings=False)  # This checks the sys.argv list too.
             # Even if it returns True, don't save settings yet, since
             # gcode.generateTowerThread will do that.
         except ValueError:
@@ -60,7 +60,7 @@ class Application():
             print("")
             print("ERROR:")
             print("'{}' does not exist.".format(gcode.getVar("template_gcode_path")))
-            if self.getVar("template_gcode_path") == gcode.default_path:
+            if gcode.getVar("template_gcode_path") == gcode.default_path:
                 print("You must first slice {}:".format(GCodeFollower._towerName))
                 print("  " + downloadPageURL)
             print("")
