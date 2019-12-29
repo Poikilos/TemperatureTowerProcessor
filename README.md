@@ -7,7 +7,7 @@ See also https://github.com/poikilos/TemperatureTowerProcessor
 - The mesh is now cleaner, and has separated parts including separate end cap for use with Blender's array modifier.
   - Position and count of vertices at top and bottom now match.
 - I created a Python GUI to configure the tower.
-  - I also included an old version without a GUI (TowerConfigurationCLI.py) in case you need to automate the process or run it remotely.
+  - I also included an old version without a GUI (TowerConfigurationCLI.py) in case you need to automate the process or run it remotely. The CLI version now uses the same backend module, so it will continue to have the same results as the GUI version going forward.
 
 ## Requirements
 - When installing Python on Windows, ensure that the **add to PATH** option is checked during install. Then open set_temperatures.pyw with "C:\Program Files (x86)\Python 3\pythonw" or whatever your "pythonw.exe" is (some versions install to C:\Python3*).
