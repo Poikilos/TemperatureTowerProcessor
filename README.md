@@ -51,3 +51,9 @@ See also https://github.com/poikilos/TemperatureTowerProcessor
   >
   > This is a Remix of the Ultimaker tower which i modified slightly to also include bridging, stringing and also fine detail. No gcode supplied. . . .
   - based on [Ultimaker 2 temperature torture calibration test](http://www.thingiverse.com/thing:696093)
+
+## Developer Notes
+### Reference Material
+- See <https://jgaurorawiki.com/start-and-end-gcode>
+- See <http://www.cnctrainingcentre.com/tips-tricks/g28-verses-g53/>
+- See <https://reprap.org/wiki/G-code#G0_.26_G1:_Move>
