@@ -16,14 +16,27 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 import os
 import decimal
 from decimal import Decimal
 import threading
+try:
+    import Tkinter as tk
+    import ttk
+except ImportError as ex2:
+    # python 3
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+    except ImportError as ex3:
+        print()
+        print("ERROR: Tk is not present."
+              " Try installing python-tk or python3-tk")
+        print()
+        print()
+        exit(1)
+
 from gcodefollower import GCodeFollower
-import tkinter as tk
-from tkinter import ttk
 
 gcode = None
 
@@ -159,6 +172,6 @@ if __name__ == "__main__":
     main()
 
 # References
-# Urban, M., & Murach, J. (2016). Murach’s Python Programming
+# Urban, M., & Murach, J. (2016). Murach's Python Programming
 #     [VitalSource Bookshelf]. Retrieved from
 #     https://bookshelf.vitalsource.com/#/books/9781943872152

@@ -9,6 +9,10 @@ import decimal
 from decimal import Decimal
 
 
+def error(msg):
+    sys.stderr.write("{}\n".format(msg))
+
+
 def get_cmd_meta(cmd):
     comment_i = cmd.find(";")
     if comment_i >= 0:
@@ -227,7 +231,7 @@ class GCodeFollower:
         # _saveLine("Writing settings:")
         self.printSettingsDocumentation(print_callback=_saveLine)
 
-    def printSettingsDocumentation(self, print_callback=print):
+    def printSettingsDocumentation(self, print_callback=error):
         print_callback(
             "You can edit \"{}\" to change settings".format(
                 self._settingsPath
