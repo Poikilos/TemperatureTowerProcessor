@@ -17,29 +17,33 @@ customDie() {
 python_mr=`python python_major_revision.py`
 pycodestyle_cmd="pycodestyle-3"
 
-if [ ! -f "`command -v pycodestyle-3`" ]; then
+if [ ! -f "`command -v $pycodestyle_cmd`" ]; then
     py_msg="."
     if [ "$python_mr" = "2" ]; then
         py_msg=", but your default python is python$python_mr so other steps may be required to make the command available."
     fi
-    echo "pycodestyle-3 is missing. You must first install the python3-pycodestyle package$py_msg"
+    # echo "* looking for pycodestyle-3 is missing. You must first install the python3-pycodestyle package$py_msg"
     if [ -f "`command -v python3`" ]; then
         pycodestyle_cmd="python3 -m pycodestyle"
     else
         pycodestyle_cmd="python -m pycodestyle"
     fi
-    echo "* attempting to use $pycodestyle_cmd..."
-    cat > /dev/null <<END
+    printf "* checking for $pycodestyle_cmd..."
+    #cat > /dev/null <<END
     $pycodestyle_cmd >& /dev/null
     if [ $? -eq 127 ]; then
         echo "* The module was not found."
+        echo "  You must first install the python3-pycodestyle package$py_msg"
         exit 127
+    else
+        echo "OK"
     fi
-END
+#END
 fi
 
 echo > style-check-output.txt
-for fname in gcodefollower.py TowerConfiguration.pyw TowerConfigurationCLI.py
+# for fname in gcodefollower.py TowerConfiguration.pyw TowerConfigurationCLI.py
+for fname in `ls *.py`
 do
     if [ ! -f "$fname" ]; then
         echo "Error: The list of files to test is hard-coded but \"$fname\" is not in \"`pwd`\"."
