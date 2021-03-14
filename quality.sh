@@ -53,6 +53,11 @@ do
 done
 if [ -f "`command -v outputinspector`" ]; then
     outputinspector style-check-output.txt
+    code=$?
+    if [ $code -ne 0 ]; then
+        cat style-check-output.txt
+        echo "Error: outputinspector failed. See errors directly before the list of quality results if any, or above this line."
+    fi
 else
     cat style-check-output.txt
     cat <<END
