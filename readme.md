@@ -1,7 +1,9 @@
 # Python GUI for Variable-Height Configurable Temperature Tower
 https://www.thingiverse.com/thing:4068975 by Poikilos
 
-See also https://github.com/poikilos/TemperatureTowerProcessor
+Sourcecode: https://github.com/poikilos/TemperatureTowerProcessor
+
+To test different retraction lengths you can try: https://github.com/poikilos/RetractionTowerProcessor
 
 ## Differences from 3dMakernoob's Version
 - The mesh is now cleaner, and has separated parts including separate end cap for use with Blender's array modifier.
