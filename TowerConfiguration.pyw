@@ -16,7 +16,10 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+from __future__ import print_function
 import os
+import sys
 import decimal
 from decimal import Decimal
 import threading
@@ -109,9 +112,10 @@ class ConfigurationFrame(ttk.Frame):
             return gcode.checkSettings()
             # Even if it returns True, don't save settings yet since
             # gcode.generateTower will do that.
-        except ValueError:
+        except ValueError as ex:
             self.echo("The temperatures must be integers or Generate"
                       " cannot proceed.")
+            self.echo(str(ex))
         except FileNotFoundError:
             # self.echo("")
             # checkSettings already called echo_callback in this case.
@@ -155,7 +159,8 @@ class ConfigurationFrame(ttk.Frame):
         # occur before processing.
         # gcode._verbose = True
         if self.checkSettingsAndShow():
-            self.generateTimer = threading.Timer(0.01, gcode.generateTower)
+            self.generateTimer = threading.Timer(0.01,
+                                                 gcode.generateTower)
             self.generateTimer.start()
 
 

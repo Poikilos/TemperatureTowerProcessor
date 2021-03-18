@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
 
+# This program changes and inserts temperatures into gcode that builds a
+# temperature tower.
+# Copyright (C) 2019  Jake Gustafson
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+from __future__ import print_function
 import sys
 import os
 import copy
@@ -140,8 +158,9 @@ class GCodeFollower:
                                    " (additional build-related codes"
                                    " that were below will be excluded)")
         # self._insert_msg = "; GCodeFollower."
-
+        self.dirStep = None
         self.max_temperature = None  # checkSettings sets this.
+        self.min_temperature = None  # checkSettings sets this.
         self.heights = None  # checkSettings sets this.
         self.temperatures = None  # checkSettings sets this.
         self.desired_temperatures = None  # checkSettings sets this.
@@ -309,6 +328,26 @@ class GCodeFollower:
     def getRangeVar(self, name, i):
         return self.getVar(self.getRangeVarName(name, i))
 
+    def getRangeVarLen(self, name):
+        return len(self.getRangeVars(name))
+
+    def getRangeVars(self, name):
+        results = []
+        got = True
+        count = 0
+        while True:
+            try:
+                got = self.getVar(self.getRangeVarName(name, count),
+                                  prevent_exceptions=True)
+            except IndexError:
+                # ^ getRangeVarName can still throw an exception
+                got = None
+            if got is None:
+                break
+            count += 1
+            results.append(got)
+        return results
+
     def _createVar(self, name, value, python_type, description):
         self._settings[name] = cast_by_type_string(value, python_type)
         self._settings_types[name] = python_type
@@ -377,6 +416,18 @@ class GCodeFollower:
         else:
             print("")
             print("Please wait...")
+
+    def pushLimits(self, value):
+        '''
+        Push min & max to contain value.
+        If either is None, they also take the value.
+        '''
+        if ((self.min_temperature is None)
+                or (value < self.min_temperature)):
+            self.min_temperature = value
+        if ((self.max_temperature is None)
+                or (value > self.max_temperature)):
+            self.max_temperature = value
 
     def checkSettings(self, allow_previous_settings=True,
                       verbose=False):
@@ -507,9 +558,23 @@ class GCodeFollower:
                     )
                 )
 
-        self.max_temperature = None  # This is set automatically
-        #                            # according to height below.
-        this_temperature = self.getRangeVar("temperature", 0)
+        self.max_temperature = None
+        self.min_temperature = None
+        # ^ These are set automatically by self.pushLimits depending
+        #   upon how many steps between all levels or how many
+        #   temperatures are available (the smallest of the two).
+        height_i = 0
+        # height = Decimal("0.00")
+        self.temperatures = []
+        self.desired_temperatures = []
+        self.dirStep = getV("temperature_step") * -1
+        if self.dirStep == 0:
+            raise ValueError("The step (per floor) should not be 0.")
+        temps = self.getRangeVars("temperature")
+        print("* Each new floor steps by: {} C".format(self.dirStep))
+        this_temperature = temps[0]
+        if self.dirStep < 1:
+            this_temperature = temps[-1]
         # if verbose:
         #     print("this_temperature: "
         #           + type(this_temperature).__name__)
@@ -523,25 +588,37 @@ class GCodeFollower:
         #     raise ValueError("The settings value '"
         #                      + self.getRangeVarName("temperature", 1)
         #                      + "' is missing (you must set this).")
-        height_i = 0
-        # height = Decimal("0.00")
-        self.temperatures = []
-        self.desired_temperatures = []
+
+
+        prevTemp = None
+        for thisTemp in temps:
+            if (prevTemp is not None) and (thisTemp < prevTemp):
+                # self.dirStep *= 1
+                raise ValueError("The steps must be in order"
+                                 " from lowest to highest.")
+            prevTemp = thisTemp
+        temps = list(reversed(temps))
+        print("* temperatures (max 1st usually): {}".format(temps))
         while True:
             if height_i < len(self.heights):
                 # height = self.heights[height_i]
                 # if verbose:
                 #    print("* adding level {} ({} C) at"
-                #           " {}mm".format(height_i, this_temperature, height))
+                #           " {}mm".format(height_i,
+                #                          this_temperature, height))
                 self.temperatures.append(this_temperature)
-                self.max_temperature = this_temperature
+                self.pushLimits(this_temperature)
+                # ^ sets min_temperature and max_temperature
             self.desired_temperatures.append(this_temperature)
             # if verbose:
             #     print("temperature_step: "
             #           + type(getV("temperature_step")).__name__)
-            this_temperature += getV("temperature_step")
-            if this_temperature > self.getRangeVar("temperature", 1):
-                this_temperature -= getV("temperature_step")
+            this_temperature += self.dirStep
+            if (self.dirStep > 0) and (this_temperature > temps[-1]):
+                this_temperature -= self.dirStep
+                break
+            elif (self.dirStep < 0) and (this_temperature < temps[-1]):
+                this_temperature -= self.dirStep
                 break
             height_i += 1
         this_temperature = None
@@ -553,27 +630,44 @@ class GCodeFollower:
         hs = ["{:>8.3f}mm".format(t) for t in self.heights]
         self.echo("height:     " + "".join(hs))
         self.echo("")
-        if self.max_temperature < self.getRangeVar("temperature", 1):
+        if (self.min_temperature > temps[-1]) and (self.dirStep < 0):
             self.echo(
-                "INFO: Only {} floors will be present since the"
+                "INFO: The min_temperature {} didn't reach the last."
+                " Only {} floors will be present since the"
+                " number of desired temperatures to min is greater than"
+                " the available {} floors in the model"
+                " (counting by {} C).".format(self.min_temperature,
+                                              len(self.temperatures),
+                                              len(self.heights),
+                                              getV("temperature_step"))
+            )
+        elif (self.max_temperature < temps[-1]) and (self.dirStep > 0):
+            self.echo(
+                "INFO: The max_temperature {} didn't reach the last."
+                " Only {} floors will be present since the"
                 " number of desired temperatures is greater than"
                 " the available {} floors in the model"
-                " (counting by {} C).".format(len(self.temperatures),
+                " (counting by {} C).".format(self.min_temperature,
+                                              len(self.temperatures),
                                               len(self.heights),
                                               getV("temperature_step"))
             )
         elif len(self.temperatures) < len(self.heights):
-            self.echo("INFO: Only {} floors will be present since the"
-                      " temperature range (counting by {}) has fewer"
-                      " steps than the {}-floor tower"
+            self.echo("INFO: Only {} floors ({}) will be present since"
+                      " the temperature range ({} counting by {}) has"
+                      " fewer steps than the {}-floor tower"
                       " model.".format(len(self.temperatures),
+                                       self.temperatures,
+                                       temps,
                                        getV("temperature_step"),
                                        len(self.heights)))
         return True
 
     def getRangeString(self, name):
-        return (str(self.getRangeVar(name, 0)) + "-"
-                + str(self.getRangeVar(name, 1)))
+        temps = self.getRangeVars(name)
+        if self.dirStep < 0:
+            return "{}-{}".format(temps[-1], temps[0])
+        return "{}-{}".format(temps[0], temps[-1])
 
     def setStat(self, name, value, line_number):
         """
@@ -1095,7 +1189,7 @@ class GCodeFollower:
                                             #     )
                                             # )
                                             dwfnh_shown[l_str] = True
-
+#
                         else:  # some other G code
                             if getS("stop_building"):
                                 if would_build:
@@ -1122,9 +1216,9 @@ class GCodeFollower:
                             previous_dst_line = line
 
                     elif cmd_meta[0][0] == "M":
-                        if line[0:5] == stw_cmd + " ":  # set
-                            #                           # temperature &
-                            #                           # wait
+                        if line[0:5] == stw_cmd + " ":
+                            # ^self.commands['set temperature and wait']
+                            #  (usually M109)
                             # (extruder temperature)
                             # d for decimal integer format (with no
                             # decimals):
