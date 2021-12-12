@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import print_function
+from __future__ import division
 '''
 This program changes and inserts temperatures into gcode that builds a
 temperature tower.

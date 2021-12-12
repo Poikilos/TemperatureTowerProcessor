@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import print_function
+from __future__ import division
 '''
 This program changes and inserts temperatures into gcode that builds a
 temperature tower.
@@ -24,15 +25,6 @@ Optional arguments:
 --verbose -- Set whether to show additional messages.
 '''
 
-
-
-def usage():
-    # print(CLI_HELP)
-    print(GCodeFollower.getDocumentation())
-    GCodeFollower.printSettingsDocumentation()
-    print("")
-
-
 '''
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -55,6 +47,7 @@ import shutil
 import json
 import decimal
 import inspect
+import math
 
 from decimal import Decimal
 
@@ -62,6 +55,57 @@ from decimal import Decimal
 def error(msg):
     sys.stderr.write("{}\n".format(msg))
 
+def debug(msg):
+    '''
+    The Main class should override this and use its own verbose setting.
+    '''
+    error(msg)
+
+def usage():
+    # print(CLI_HELP)
+    print(GCodeFollower.getDocumentation())
+    GCodeFollower.printSettingsDocumentation()
+    print("")
+
+
+def round_nearest(x):
+    '''
+    This function circumvents the new Python 3 behavior where round uses "banker's rounding"
+    to "limit the accumulation of errors when summing a list of rounded
+    integers" (according to remi.lapeyre on
+    <https://bugs.python.org/issue36082>).
+    - The result of banker's rounding is that round(1.5) is 2 and
+      round(2.5) is 2 and round(2.51) is 3. Rounding even numbers
+      differs since the rounding is toward (but not all the way to) the
+      nearest even number.
+    - To monkey patch Python 3 to do rounding the "school" way (such as
+      rounding 2.5 to 3), do:
+      round = round_nearest
+
+    This function is based on E. Zeytinci's Nov 13, 2019 answer
+    <https://stackoverflow.com/a/58839239> on
+    <https://stackoverflow.com/questions/58838995/how-to-switch-off-
+    bankers-rounding-in-python>.
+    '''
+    i, f = divmod(x, 1)
+    return int(i + ((f >= 0.5) if (x > 0) else (f > 0.5)))
+
+
+round = round_nearest
+
+
+def getHMSFromS(estSec):
+    estLeft = estSec
+    estHr = estLeft // 3600
+    estLeft -= float(estHr) * 3600.0
+    estMin = estLeft // 60
+    estLeft -= float(estMin) * 60.0
+    estLeft = round(estLeft)
+    return int(estHr), int(estMin), round(estLeft)
+
+def getHMSMessageFromS(estSec):
+    h, m, s = getHMSFromS(estSec)
+    return "{}h{}m{}s".format(h, m, s)
 
 def encVal(v):
     '''
@@ -79,6 +123,11 @@ def encVal(v):
 
 
 def get_cmd_meta(cmd):
+    '''
+    Parse the g-code command to a set of lists such as:
+    [['G', '1'], ['X', '110'], ['E', '45'], ['F', '500.0']]
+    [['M', '117'], ['', 'Some message']]
+    '''
     comment_i = None
     '''
     commentMarks = [";", "//"]
@@ -113,14 +162,61 @@ def get_cmd_meta(cmd):
         cmd = cmd.replace("  ", " ")
     parts = cmd.split(" ")
     cmd_meta = []
+    functionStr = None
     for i in range(len(parts)):
-        parts[i] = parts[i].strip()
-        if len(parts[i]) > 1:
-            cmd_meta.append([parts[i][0], parts[i][1:]])
+        arg = parts[i].strip()
+        if functionStr is None:
+            if len(arg) < 1:
+                functionStr = ""
+            else:
+                functionStr = arg
+        if len(arg) > 1:
+            k, v = arg[0], arg[1:]
+            if functionStr == "M117":
+                displayStr = " ".join(parts[1:])
+                cmd_meta.append([k, v])
+                cmd_meta.append(['', displayStr])
+                # ^ See M117 in docstring
+                break
+            try:
+                fv = float(v)
+            except ValueError as ex:
+                error('WARNING: "{}" is not a number in "{}"'
+                      ''.format(v, cmd))
+            cmd_meta.append([k, v])
         else:
             # no value (such as: To home X, nothing is after 'G1 X'):
-            cmd_meta.append([parts[i][0]])
+            cmd_meta.append([arg[0]])
     return cmd_meta
+
+
+def cmd_meta_dict(cmd_meta):
+    '''
+    Change results of get_cmd_meta like
+    [['G', '1'], ['X', '110'], ['E', '45'], ['F', '500.0']]
+    to a dictionary like:
+    {'function': 'G1', 'G': '1', 'X': '110', 'E': '45', 'F': '500.0'}
+    '''
+    if cmd_meta is None:
+        return None
+    metaD = {}
+    for pair in cmd_meta:
+        if metaD.get('function') is None:
+            if len(pair) != 2:
+                error("WARNING: The G-code command doesn't have"
+                      " 2 parts: {} in {}"
+                      "".format(pair, cmd_meta))
+                metaD['function'] = ''  # prevent gathering it again
+            else:
+                metaD['function'] = ''.join(pair)
+        if len(pair) == 2:
+            k, v = pair
+        elif len(pair) == 1:
+            k, v = pair[0], None
+        else:
+            k, v = pair[0], pair[1:]
+        metaD[k] = v
+    return metaD
 
 
 def cast_by_type_string(value, type_str):
@@ -188,6 +284,31 @@ class GCodeFollowerArgParser():
 
 
 class GCodeFollower:
+    '''
+
+    Public properties:
+    emuState --  Gather and store the projected state of the hardware.
+        The state is reset on _generateTower since it calls
+        resetEmuState.
+        State variables:
+        - 'position' is a 3D position of the current tool (a list or
+          tuple of 3 floats). It doesn't need to be stored separately
+          in each tool because the a head with all tools on the same
+          carriage is the only arrangement that is emulated.
+        - 'tool' is the current tool string such as 'T0' by default.
+        - 'tools' is a dictionary of tool states where 'tool' is the
+          key. Obtain the current tool's state safely with getToolState.
+          Example tools:
+          - 'T0' (and others) is a dict containing tool information.
+            - 'temperature' is the projected temperature (starting at
+              self.roomTemperature).
+            - There is no position. The global position is used.
+        - 'servos' is a dictionary of servo states where 'extruder' is
+          the key. Obtain the servos's state safely with getEPos.
+          Example servos:
+          - 'E0' (and others) is a dict containing servo information.
+            - 'position' is a 1D (float, not list) position.
+    '''
     _towerName = ("the mesh (such as STL) from Python GUI for"
                   " Configurable Temperature Tower")
     _downloadPageURLs = [
@@ -216,7 +337,9 @@ class GCodeFollower:
         return msg
 
     def __init__(self, echo_callback=None, enable_ui_callback=None,
-                 verbose=False):
+                 verbose=False, autoHomeToolTemperature=200.0,
+                 autoHomeBedTemperature=60.0, autoHomeMoveTime=51.0,
+                 roomTemperature=20):
         """
         Change settings via setVar and self.getVar. Call
         "getSettingsNames" to get a list of all settings. Call "getHelp"
@@ -229,8 +352,23 @@ class GCodeFollower:
         enable_ui_callback -- Whatever function you provide must accept
             a boolean. It will be called with false whenever a process
             starts and true whenever a process ends.
+        autoHomeBedTemperature -- Assume this temperature has to be
+            reached before G28 will start (If not None, add a
+            significant delay to G28)
+        autoHomeToolTemperature -- Assume this temperature has to be
+            reached before G28 will start (If not None, add a
+            significant delay to G28)
+        autoHomeMoveTime -- Assume that G28 takes this long even if the
+            temperature is reached (A longer time like 90.0 is
+            recommended if using a touch sensor with a repeatability
+            test enabled).
+        roomTemperature -- Set the temperature of the room.
         """
         self._verbose = (verbose is True)
+        global debug
+        debug = self.debug
+        self._estS = 0.0
+        self._extrudeS = None
         self._settings = {}
 
         self.stats = {}
@@ -271,6 +409,16 @@ class GCodeFollower:
         self._stop_building_msg = ("; GCodeFollower says: stop_building"
                                    " (additional build-related codes"
                                    " that were below will be excluded)")
+        self.fwDefaultPositionMode = 'absolute'
+        self.autoHomeBedTemperature = autoHomeBedTemperature
+        self.autoHomeToolTemperature = autoHomeToolTemperature
+        self.autoHomeMoveTime = autoHomeMoveTime
+        self.roomTemperature = roomTemperature
+        # ^ The default *can* be absolute if set in Marlin
+        #   configuration_adv.h (See
+        #   <https://reprap.org/forum/read.php?262,193749>).
+        # Initialize emuState (requires self.fwDefaultPositionMode):
+        self.resetEmuState()
         # self._insert_msg = "; GCodeFollower."
         self.dirStep = None
         self.max_temperature = None  # checkSettings sets this.
@@ -335,6 +483,8 @@ class GCodeFollower:
         for k, v in self.commands.items():
             self.code_numbers[k] = Decimal(v[1:])
 
+        self.debuggedLengths = []
+
     def saveDocumentationOnce(self):
         if not os.path.isfile(GCodeFollower._settingsDocPath):
             self.saveDocumentation()
@@ -347,6 +497,115 @@ class GCodeFollower:
                 "* an explanation of settings was previously saved to"
                 " '{}'.".format(GCodeFollower._settingsDocPath)
             )
+
+    def getToolPos(self):
+        return [
+            self.emuState['position'][0],
+            self.emuState['position'][1],
+            self.emuState['position'][2]
+        ]
+
+    def setExtruder(self, extruder):
+        '''
+        Sequential arguments:
+        extruder -- The name of an extruder such as E0
+        '''
+        if not extruder.startswith('E'):
+            raise ValueError("extruder must start with 'E' but is {}"
+                             "".format(extruder))
+        self.emuState['extruder'] = extruder
+        if self.emuState['servos'].get(extruder) is None:
+            self.emuState['servos'][extruder] = {
+                'position': 0.0,
+                'position_mode': self.fwDefaultPositionMode,
+            }
+
+    def getEPos(self):
+        servo = self.emuState['extruder']
+        servoState = self.emuState['servos'].get(servo)
+        if servoState is None:
+            return None
+        return servoState.get('position')
+
+    def setEPos(self, ePos):
+        ePos = float(ePos)
+        # ^ Ensure that a bad value raises ValueError.
+        servo = self.emuState['extruder']
+        if self.emuState['servos'].get(servo) is None:
+            self.emuState['servos'][servo] = {}
+        self.emuState['servos'][servo]['position'] = ePos
+
+    def getToolTemperature(self):
+        toolState = self.getToolState()
+        temperature = None
+        if toolState is not None:
+            temperature = toolState.get('temperature')
+        return temperature
+
+    def setToolTemperature(self, temperature):
+        temperature = float(temperature)
+        # ^ Ensure that a bad value raises ValueError.
+        tool = self.emuState['tool']
+        if self.emuState['tools'].get(tool) is None:
+            self.emuState['tools'][tool] = {}
+        self.emuState['tools'][tool]['temperature'] = temperature
+
+    def setToolToRoomTemperature(self):
+        self.setToolTemperature(self.roomTemperature)
+
+    def setToolToAmbientTemperature(self):
+        self.setToolToRoomTemperature()
+
+    def getBedTemperature(self):
+        temperature = self.emuState.get('bed_temperature')
+        return temperature
+
+    def setBedTemperature(self, temperature):
+        temperature = float(temperature)
+        # ^ Ensure that a bad value raises ValueError.
+        self.emuState['bed_temperature'] = temperature
+
+    def setBedToRoomTemperature(self):
+        self.setBedTemperature(self.roomTemperature)
+
+    def setBedToAmbientTemperature(self):
+        self.setBedToRoomTemperature()
+
+    def getToolState(self):
+        '''
+        Get a tool state dict guaranteed to never be None. See the
+        GCodeFollower documentation for descriptions of tool state
+        entries.
+        '''
+        tool = self.emuState['tool']
+        toolState = self.emuState['tools'].get(tool)
+        if toolState is None:
+            return {}
+        return toolState
+
+    def setTool(self, tool):
+        if not tool.startswith('T'):
+            raise ValueError("tool should start with 'T' but is {}"
+                             "".format(tool))
+        self.emuState['tool'] = tool
+        if self.emuState['tools'].get(tool) is None:
+            self.emuState['tools'][tool] = {
+                'offsets': (0.0, 0.0, 0.0),
+            }
+
+    def resetEmuState(self):
+        self.emuState = {
+            'tools': {
+            },
+            'servos': {
+            },
+            'position': (0.0, 0.0, 0.0),
+            'position_mode': self.fwDefaultPositionMode,
+        }
+        self.setBedToAmbientTemperature()
+        self.setTool('T0')
+        self.setToolToAmbientTemperature()
+        self.setExtruder('E0')
 
     def saveDocumentation(self):
         try:
@@ -832,6 +1091,300 @@ class GCodeFollower:
             self.enableUI(True)
             raise ex
 
+    def getToolSecRelTemp(self, S):
+        '''
+        Get an estimated time it takes to reach temperature S from the
+        estimated current temperature.
+        - If the current temperature is None,
+          setToolToAmbientTemperature is called.
+        '''
+        temperature = self.getToolTemperature()
+        if temperature is None:
+            self.setToolToAmbientTemperature()
+            temperature = self.getToolTemperature()
+        diff = abs(S - temperature)
+        toolSecPerDegree = 109.0 / 188.0
+        # It took R2X 14T with FlexionHT about 1m49s to get from
+        # room temperature of about 22C to 210C: 109s/188degrees
+        # = 0.57978723404255319149 sec/deg
+        return float(diff) * toolSecPerDegree
+
+    def debug(self, msg):
+        if not self._verbose:
+            return
+        error("[debug] {}".format(msg))
+
+    def getBedSecRelTemp(self, S):
+        '''
+        Get an estimated time it takes to reach temperature S from the
+        estimated current temperature.
+        - If the current temperature is None, setBedToAmbientTemperature
+          is called.
+        '''
+        temperature = self.getBedTemperature()
+        if temperature is None:
+            self.setBedToAmbientTemperature()
+            temperature = self.getBedTemperature()
+        diff = abs(S - temperature)
+        bedSecPerDegree = 213.0 / 36.0
+        # It took R2X 14T with stock z axis about 3m33s to get from
+        # room temperature of about 22C to 58C: 213s/36degrees
+        # = 5.91666666666666666667 sec/deg
+        return float(diff) * bedSecPerDegree
+
+
+    def addSec(self, gcodeLine):
+        '''
+        Analyze the gcode line and add seconds to self._estS based on
+        the travel speed and distance.
+        '''
+        gcodeLine = gcodeLine.strip()
+        cmd_meta = get_cmd_meta(gcodeLine)
+        meta = cmd_meta_dict(cmd_meta)
+        if meta is None:
+            lenMsg = "{}(string[{}])".format(meta, 0)
+        else:
+            lenMsg = "{}(string[{}])".format(cmd_meta[0], len(meta))
+        if lenMsg not in self.debuggedLengths:
+            # Show unique command structures (Where the combination
+            # of the G-code name and the parameter count is unique).
+            self.debuggedLengths.append(lenMsg)
+            debug("* found first instance of a command like: {}"
+                  "".format(meta))
+        if meta is None:
+            return
+        f = meta.get('function')
+        if f is None:
+            f = ""
+        if f.startswith("T"):
+            # Choose tool
+            # such as {'T': '0'}
+            self.setTool(f)
+        elif f == "M104":
+            # Set hotend temperature
+            # such as {'M': '104', 'S': '210'}
+            S = meta.get('S')
+            if S is None:
+                error('WARNING: S is None in "{}"'
+                      ''.format(cmd_meta))
+            else:
+                S = float(S)
+                self.setToolTemperature(S)
+        elif f == "M105":
+            # Report temperatures
+            # Usage: M105 [R] [T<index>]
+            # such as {'M': '105'}
+            pass
+        elif f == "M109":
+            # Wait for hotend temperature
+            # Usage: M109 [B<temp>] [F<flag>] [I<index>] [R<temp>] [S<temp>] [T<index>]
+            # such as {'M': '109', 'S': '210'}
+            S = meta.get('S')
+            if S is None:
+                error('WARNING: S is None in "{}"'
+                      ''.format(cmd_meta))
+            else:
+                S = float(S)
+                heatupTime = self.getToolSecRelTemp(S)
+                self._estS += heatupTime
+                oldS = self.getToolTemperature()
+                debug("_estSec += {} tool heatup time from {} to {}"
+                      "".format(heatupTime, oldS, S))
+                self.setToolTemperature(S)
+        elif f == "M82":
+            # Set extrusion to absolute mode
+            # such as {'M': '82'}
+            pass
+        elif f == "M280":
+            # Set a servo position
+            # Usage: M280 P<index> S<pos>
+            # such as {'M': '280', 'P': '0', 'S': '160'}
+            pass
+        elif f == "G4":
+            # Dwell
+            # Usage: G4 [P<time (ms)>] [S<time (sec)>]
+            # such as {'G': '4', 'P': '100'}
+            S = meta.get('S')
+            P = meta.get('P')
+            if P is not None:
+                P = float(P)
+            if S is None:
+                if P is not None:
+                    S = P / 1000.0
+            else:
+                S = float(S)
+            if S is not None:
+                self._estS += S
+                debug("_estSec += {} dwell".format(S))
+            else:
+                error('WARNING: S & P are None in "{}"'
+                      ''.format(cmd_meta))
+        elif f == "M420":
+            # Get and/or set bed leveling state
+            # such as {'M': '420', 'S': '1'}
+            pass
+        elif f == "G28":
+            # Auto-home
+            # such as {'G': '28'}
+            oldTS = self.getToolTemperature()
+            T_S = self.autoHomeToolTemperature
+            toolHeatupTime = self.getToolSecRelTemp(T_S)
+            self._estS += toolHeatupTime
+            debug("_estSec += {} tool heatup time from {} to {} auto"
+                  "".format(toolHeatupTime, oldTS, T_S))
+            self.setToolTemperature(T_S)
+            oldBS = self.getBedTemperature()
+            B_S = self.autoHomeBedTemperature
+            bedHeatupTime = self.getBedSecRelTemp(B_S)
+            self._estS += bedHeatupTime
+            debug("  _estSec += {} bed heatup time from {} to {} auto"
+                  "".format(bedHeatupTime, oldBS, B_S))
+            self.setBedTemperature(B_S)
+            self._estS += self.autoHomeMoveTime
+            debug("  _estSec += {} autoHomeMoveTime"
+                  "".format(self.autoHomeMoveTime))
+            # ^ A long time assumes a touch sensor
+        elif f == "M190":
+            # Wait for bed temperature
+            # such as {'M': '190', 'S': '60.0'}
+            oldBS = self.getBedTemperature()
+            B_S = meta.get('S')
+            if B_S is not None:
+                B_S = float(B_S)
+                bedHeatupTime = self.getBedSecRelTemp(B_S)
+                self._estS += bedHeatupTime
+                debug("_estSec += {} bed heatup time from {} to {}"
+                      "".format(bedHeatupTime, oldBS, B_S))
+                self.setBedTemperature(B_S)
+            else:
+                # TODO: see if self.getBedTemperature differs from the
+                # last bed temp command's S.
+                pass
+        elif f == "M92":
+            # Set Axis Steps-per-unit
+            # such as {'G': '92', 'E': '0'}
+            pass
+        elif f in ["G0", "G1", "G92"]:
+            # such as:
+            # - {'G': '1', 'X': '50', 'Y': '1.5', 'Z': '0.22',
+            #    'F': '9000'}
+            # - {'G': '1', 'X': '110', 'E': '45', 'F': '500.0'}
+            # - {'G': '1', 'Y': '0.0', 'F': '250.0'}
+            # Caveats:
+            # - "Marlin 2.0 introduces an option to maintain a
+            #   separate default feedrate for G0"
+            #   -<https://marlinfw.org/docs/gcode/G000-G001.html>
+            # - "Coordinates are given in millimeters by default. Units
+            #   may be set to inches by G20."
+            #   -<https://marlinfw.org/docs/gcode/G000-G001.html>
+            oldPos = self.getToolPos()
+            newPos = self.getToolPos()
+            newPos = [meta.get('X'), meta.get('Y'), meta.get('Z')]
+            # ^ Cast to float before using (See the two loops below).
+            deltas = [0.0, 0.0, 0.0]
+            moveAny = False
+            if self.emuState['position_mode'] == 'relative':
+                for i in range(len(newPos)):
+                    if newPos[i] is None:
+                        newPos[i] = 0.0
+                    else:
+                        newPos[i] = float(newPos[i])
+                        moveAny = True
+                    deltas[i] = abs(newPos[i])
+            else:
+                for i in range(len(newPos)):
+                    if newPos[i] is None:
+                        newPos[i] = oldPos[i]
+                    else:
+                        moveAny = True
+                        newPos[i] = float(newPos[i])
+                    deltas[i] = abs(newPos[i]-oldPos[i])
+            distance = math.sqrt(
+                deltas[0]**2 + deltas[1]**2 + deltas[2]**2
+            )
+            # elif f == "G0":
+            # such as:
+            # - {'G': '0', 'F': '4200', 'X': '103.931', 'Y': '57.516',
+            #    'Z': '0.32'}
+            # - {'G': '0', 'F': '4200', 'X': '103.451', 'Y': '57.996'}
+            # - {'G': '0', 'X': '103.251', 'Y': '57.416'}
+
+            F = meta.get('F')  # mm/minute
+            tool = self.emuState['tool']
+            if F is None:
+                oldF = self.emuState['tools'][tool].get('feedrate')
+                if oldF is not None:
+                    F = oldF
+                else:
+                    error("WARNING: The feedrate is unknown at {}."
+                          "".format(cmd_meta))
+                return
+            else:
+                F = float(F)
+            feedPerSec = F / 60.0
+
+            if moveAny:
+                travelTime = distance / feedPerSec
+                self._estS += travelTime
+                if travelTime > 6:
+                    debug("_estSec += {} travel time ({} / {})"
+                          "".format(travelTime, distance, feedPerSec))
+                    debug("  oldPos: {}".format(oldPos))
+                    debug("  newPos: {}".format(newPos))
+                    debug("  deltas: {}".format(deltas))
+                    debug("  self.emuState['position_mode']: {}"
+                          "".format(self.emuState['position_mode']))
+                self.emuState['position'] = newPos
+                self.emuState['tools'][tool]['feedrate'] = F
+                # ^ A servo feedrate is set below if not returning.
+                return
+            servo = self.emuState['extruder']
+            self.emuState['servos'][servo]['feedrate'] = F
+
+            eDiff = 0.0
+            E = meta.get('E')
+            if E is not None:
+                E = float(E)
+                eDiff = abs(self.getEPos() - E)
+                feedTime = eDiff / feedPerSec
+                self._estS += feedTime
+                debug("_estSec += {} feed time ({} / {})"
+                      "".format(feedTime, eDiff, feedPerSec))
+                self.setEPos(E)
+            else:
+                error('WARNING: Estimating "{}" is not possible since'
+                      ' there was no X, Y, Z, nor E movement.'
+                      ''.format(cmd_meta))
+
+        elif f == "M107":
+            # Fan off
+            # such as {'M': '107'}
+            pass
+        elif f == "M106":
+            # Set fan speed
+            # such as {'M': '106', 'S': '255'}
+            pass
+        elif f == "G90":
+            self.emuState['position_mode'] = 'absolute'
+        elif f == "G91":
+            self.emuState['position_mode'] = 'relative'
+        elif f == "M140":
+            # Set bed temp BUT don't wait.
+            pass
+        elif f == "M117":
+            # Show a message.
+            pass
+        elif f == "M84":
+            # Disable motors.
+            pass
+        else:
+            error("WARNING: The command isn't emulated for estimates"
+                  " or other uses: {}"
+                  "".format(cmd_meta))
+        # Additional relevant commands:
+        # M209: Set auto retract
+        # M141: Set chamber temperature
+
     def _generateTower(self):
         getV = self.getVar
         getS = self.getStat
@@ -859,6 +1412,7 @@ class GCodeFollower:
                                " run checkSettings before"
                                " generateTower.")
         echoP = self._echo_progress
+        self._estS = 0.0
         start_temperature_found = False
         stw_cmd = self.commands['set temperature and wait']
         stw_param0 = self.params['set temperature and wait'][0]
@@ -1024,13 +1578,20 @@ class GCodeFollower:
                     if cmd_meta is None:
                         if ((not getS("stop_building")) or
                                 (not double_blank)):
+                            self.addSec(original_line)
                             outs.write(
                                 (original_line.rstrip("\n").rstrip("\r")
                                  + "\n")
                             )
                             previous_dst_line = line
                         continue
-                    code_number = int(cmd_meta[0][1])
+                    # cmdStr ''.join(cmd_meta[0])  # such as "M117"
+                    try:
+                        code_number = int(cmd_meta[0][1])
+                    except ValueError as ex:
+                        print("Error in cmd_meta: {}".format(cmd_meta))
+                        raise ex
+
                     if cmd_meta[0][0] == "G":
                         if given_values.get('E') is not None:
                             would_extrude = True
@@ -1109,6 +1670,7 @@ class GCodeFollower:
                                             deltas.get("Z")
                                         )
                                     )
+                            self.addSec(line)
                             outs.write(line + "\n")
                             previous_dst_line = line  # It's just a
                             #                         # movement, so
@@ -1163,6 +1725,18 @@ class GCodeFollower:
                                     if not getS("stop_building"):
                                         setS("stop_building", True,
                                              line_number)
+                                        estHr, estMin, estLeft = (
+                                            getHMSFromS(self._estS)
+                                        )
+                                        self._estS
+                                        print("ESTIMATE: {}s"
+                                              "".format(self._estS))
+                                        self._extrudeS = self._estS
+                                        print("ESTIMATE: {}h{}m{}s"
+                                              "".format(estHr,
+                                                        estMin,
+                                                        estLeft))
+                                        # self.addSec(original_line)
                                         outs.write(
                                             (self._stop_building_msg
                                              + "\n")
@@ -1212,6 +1786,21 @@ class GCodeFollower:
                                         if not getS("stop_building"):
                                             setS("stop_building", True,
                                                  line_number)
+                                            print("ESTIMATE: {}s"
+                                                  "".format(
+                                                    self._estS
+                                            ))
+                                            self._extrudeS = (
+                                                self._estS
+                                            )
+                                            estHr, estMin, estLeft = (
+                                                getHMSFromS(self._estS)
+                                            )
+                                            print("ESTIMATE: {}h{}m{}s"
+                                                  "".format(estHr,
+                                                            estMin,
+                                                            estLeft))
+                                            # self.addSec(original_line)
                                             outs.write(
                                                 (self._stop_building_msg
                                                  + "\n")
@@ -1290,6 +1879,7 @@ class GCodeFollower:
                                             tmprs[getL()]
                                         )
                                         # echoP(new_line)
+                                        self.addSec(new_line)
                                         outs.write(new_line + "\n")
                                         previous_dst_line = new_line
                                         modS("new_line_count", 1,
@@ -1346,6 +1936,7 @@ class GCodeFollower:
                                                 line_number, line
                                             )
                                         )
+                            self.addSec(line)
                             outs.write(line + "\n")
                             previous_dst_line = line
 
@@ -1364,7 +1955,7 @@ class GCodeFollower:
                                       " command at {}:"
                                       " {}".format(line_number,
                                                    getS("height"), line)
-                                      + "\n- changed to:" + new_line
+                                      + "\n- changed to: " + new_line
                                       + "...")
                             else:
                                 echoP(
@@ -1373,9 +1964,10 @@ class GCodeFollower:
                                     " {}".format(line_number,
                                                  getS("height"),
                                                  line)
-                                    + "\n- changed to:" + new_line
+                                    + "\n- changed to: " + new_line
                                     + "..."
                                 )
+                            self.addSec(new_line)
                             outs.write(new_line + "\n")
                             previous_dst_line = line
                             # if getL() == 0:
@@ -1391,16 +1983,22 @@ class GCodeFollower:
                             # Do not keep the fan speed line.
                             continue
                         else:
+                            self.addSec(line)
                             outs.write(line + "\n")
                             previous_dst_line = line
                     else:
+                        self.addSec(line)
                         outs.write(line + "\n")
                         previous_dst_line = line
                         pass
                         # echoP("Unknown command:"
                         #       " {}".format(cmd_meta[0][0]))
         shutil.move(tmp_path, dst_path)
-        self.echo("100% (done; saved {})".format(dst_path))
+        etaTimeStr = getHMSMessageFromS(self._estS)
+        extTimeStr = getHMSMessageFromS(self._extrudeS)
+        self.echo("100% (done; saved {};"
+                  " estimated print time: {} ({} extrusion))"
+                  "".format(dst_path, etaTimeStr, extTimeStr))
         bytes_count = bytes_total
         setS("progress", "100%", line_number)
 
