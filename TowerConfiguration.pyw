@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-
-# This program changes and inserts temperatures into gcode that builds a
-# temperature tower.
-# Copyright (C) 2019  Jake Gustafson
-
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 from __future__ import print_function
+'''
+This program changes and inserts temperatures into gcode that builds a
+temperature tower.
+Copyright (C) 2019  Jake "Poikilos" Gustafson
+'''
+
+'''
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+'''
 import os
 import sys
 import decimal
@@ -41,15 +43,16 @@ except ImportError as ex2:
 
 from gcodefollower import (
     GCodeFollower,
+    GCodeFollowerArgParser,
     error,
     encVal,
 )
 
 gcode = None
-verbose = False
+runParams = None
 
 def debug(msg):
-    if not verbose:
+    if not runParams.verbose:
         return
     error(msg)
 
@@ -59,7 +62,7 @@ class ConfigurationFrame(ttk.Frame):
         global gcode
         gcode = GCodeFollower(echo_callback=self.echo,
                               enable_ui_callback=self.enableUI,
-                              verbose=verbose)
+                              verbose=runParams.verbose)
         gcode.saveDocumentationOnce()
         self.generateTimer = None
         self.templateGCodePath = tk.StringVar()
@@ -124,14 +127,14 @@ class ConfigurationFrame(ttk.Frame):
 
     def checkSettingsAndShow(self):
         try:
-            debug("* template_gcode_path: {} in {}"
-                  .format(encVal(template_gcode_path),
-                          'checkSettingsAndShow'))
-            return gcode.checkSettings(
-                verbose=verbose,
-                template_gcode_path=template_gcode_path,
-                temperatures=temperatures,
+            debug(
+                "* template_gcode_path: {} in {}"
+                "".format(
+                    encVal(gcode.getVar('template_gcode_path')),
+                    'checkSettingsAndShow'
+                )
             )
+            return gcode.checkSettings()
             # Even if it returns True, don't save settings yet since
             # gcode.generateTower will do that.
         except ValueError as ex:
@@ -193,43 +196,28 @@ class ConfigurationFrame(ttk.Frame):
         else:
             self.enableUI(True)
 
-template_gcode_path = None
-temperatures = None
 
 def main():
     global root
+    global runParams
     root = tk.Tk()
     root.title("Tower Configuration by Poikilos")
-    global verbose
-    global template_gcode_path
-    global temperatures
-    seqArgs = []
-    for argI in range(1, len(sys.argv)):
-        arg = sys.argv[argI]
-        if arg == "--verbose":
-            verbose = True
-            debug("* Verbose mode is enabled.")
-        elif arg.startswith("--"):
-            raise ValueError("The argument {} is invalid.".format(arg))
-        else:
-            seqArgs.append(arg)
 
+    runParams = GCodeFollowerArgParser()
     frame = ConfigurationFrame(root)
 
-    debug("seqArgs={}".format(seqArgs))
-    if (len(seqArgs) == 1) or (len(seqArgs) == 3):
-        template_gcode_path = seqArgs[0]
-        debug("* template_gcode_path is {}".format(template_gcode_path))
-        frame.templateGCodePath.set(template_gcode_path)
 
-    if len(seqArgs) == 3:
-        temperatures = [seqArgs[1], seqArgs[2]]
-    elif len(seqArgs) == 2:
-        temperatures = [seqArgs[0], seqArgs[1]]
-    if temperatures is not None:
-        debug("* temperatures is set to {}".format(temperatures))
-        frame.temperatureVs[0].set(temperatures[0])
-        frame.temperatureVs[1].set(temperatures[1])
+    if runParams.template_gcode_path is not None:
+        debug("* template_gcode_path is set to {}"
+              "".format(runParams.template_gcode_path))
+        frame.templateGCodePath.set(runParams.template_gcode_path)
+
+
+    if runParams.temperatures is not None:
+        debug("* temperatures is set to {}"
+              "".format(runParams.temperatures))
+        frame.temperatureVs[0].set(runParams.temperatures[0])
+        frame.temperatureVs[1].set(runParams.temperatures[1])
 
     root.mainloop()
     # (Urban & Murach, 2016, p. 515)

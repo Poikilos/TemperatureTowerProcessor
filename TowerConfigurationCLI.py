@@ -1,37 +1,41 @@
 #!/usr/bin/env python3
-
-# This program changes and inserts temperatures into gcode that builds a
-# temperature tower.
-# Copyright (C) 2019  Jake Gustafson
-
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 from __future__ import print_function
+'''
+This program changes and inserts temperatures into gcode that builds a
+temperature tower.
+Copyright (C) 2019  Jake "Poikilos" Gustafson
+'''
+
+'''
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+'''
 import os
 import sys
 import threading
-from gcodefollower import GCodeFollower
+from gcodefollower import (
+    GCodeFollower,
+    GCodeFollowerArgParser,
+)
 # import tk_cli_dummy as tk  # This is for synchronizing code between
 #                            # CLI and non-CLI versions.
 
 gcode = None
-
+runParams = None
 
 def usage():
     print(GCodeFollower.getDocumentation())
-    if gcode is not None:
-        gcode.printSettingsDocumentation()
+    GCodeFollower.printSettingsDocumentation()
     print("")
     print("Command Line Usage:")
     print("  Examples:")
@@ -45,17 +49,23 @@ class Application():
     def __init__(self):
         global gcode
         gcode = GCodeFollower(echo_callback=self.echo,
-                              enable_ui_callback=self.enableUI)
+                              enable_ui_callback=self.enableUI,
+                              verbose=runParams.verbose)
+
         gcode.saveDocumentationOnce()
         self.generateTimer = None
         try:
             # usage()  # for debug only
-            gcode.checkSettings(
-                allow_previous_settings=False
-                # verbose=False
-            )  # This checks the sys.argv list too.
-            # - Leave verbose=False since the errors are below in a form
-            #   that is helpful for CLI operation.
+            if runParams.temperatures is None:
+                usage()
+                raise ValueError("You must specify minimum & maximum.")
+
+            gcode.setRangeVar('temperature', 0, runParams.temperatures[0])
+            gcode.setRangeVar('temperature', 1, runParams.temperatures[1])
+            if runParams.template_gcode_path is not None:
+                gcode.setVar('template_gcode_path', runParams.template_gcode_path)
+
+            gcode.checkSettings()
             # - Even if it returns True, don't save settings yet, since
             #   gcode.generateTower will do that.
         except ValueError:
@@ -109,8 +119,10 @@ class Application():
 
 
 def main():
+    global runParams
     print("Welcome to Tower Configuration by Poikilos.")
     print("")
+    runParams = GCodeFollowerArgParser()
     Application()
 
 

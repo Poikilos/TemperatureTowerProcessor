@@ -1,23 +1,53 @@
 #!/usr/bin/env python3
-
-# This program changes and inserts temperatures into gcode that builds a
-# temperature tower.
-# Copyright (C) 2019  Jake Gustafson
-
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 from __future__ import print_function
+'''
+This program changes and inserts temperatures into gcode that builds a
+temperature tower.
+Copyright (C) 2019  Jake "Poikilos" Gustafson
+'''
+
+CLI_HELP = '''
+
+Usage
+(where command is TemperatureConfiguration.pyw or
+TemperatureConfigurationCLI.py):
+command [filename] [<temperature1> <temperature2>] [optional arguments]
+
+Sequential arguments:
+filename -- Provide a path to a gcode file.
+temperatures -- Provide a minimum and maximum temperature. You must
+    provide 0 or 2 temperatures, otherwise a ValueError will occur in
+    main(). If you provide filename, temperatures must come after
+    the filename
+
+Optional arguments:
+--verbose -- Set whether to show additional messages.
+'''
+
+
+
+def usage():
+    # print(CLI_HELP)
+    print(GCodeFollower.getDocumentation())
+    GCodeFollower.printSettingsDocumentation()
+    print("")
+
+
+'''
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+'''
+
 import sys
 import os
 import copy
@@ -109,6 +139,49 @@ def cast_by_type_string(value, type_str):
         return bool(value)
     else:
         return value
+
+
+class GCodeFollowerArgParser():
+    '''
+    The run arguments are parsed here in case you want to change them
+    via the GUI. They are parsed once and for all to avoid late parsing
+    as long as you only make one instance of this class!
+
+    '''
+    def __init__(self):
+        '''
+        This uses sys.argv! See usage for documentation.
+        '''
+        self.temperatures = None
+        self.template_gcode_path = None
+        self.verbose = False
+        seqArgs = []
+
+        for argI in range(1, len(sys.argv)):
+            arg = sys.argv[argI]
+            if arg == "--verbose":
+                self.verbose = True
+                error("* Verbose mode is enabled.")
+            elif arg.startswith("--"):
+                raise ValueError("The argument {} is invalid."
+                                 "".format(arg))
+            else:
+                seqArgs.append(arg)
+
+        if (len(seqArgs) == 1) or (len(seqArgs) == 3):
+            self.template_gcode_path = seqArgs[0]
+        if len(seqArgs) == 3:
+            self.temperatures = [seqArgs[1], seqArgs[2]]
+        elif len(seqArgs) == 2:
+            self.temperatures = [seqArgs[0], seqArgs[1]]
+        if len(seqArgs) > 3:
+            usage()
+            raise ValueError("Error: There were too many arguments.")
+
+        if self.verbose:
+            print("seqArgs: {}".format(seqArgs))
+            print("template_gcode_path: {}".format(self.template_gcode_path))
+            print("temperatures: {}".format(self.temperatures))
 
 
 class GCodeFollower:
@@ -279,15 +352,17 @@ class GCodeFollower:
             os.remove(GCodeFollower._settingsDocPath)
             raise e
 
-    def saveDocumentationTo(self, stream):
-        stream.write(self.getDocumentation() + "\n")
+    @staticmethod
+    def saveDocumentationTo(stream):
+        stream.write(GCodeFollower.getDocumentation() + "\n")
 
         def _saveLine(line):
             stream.write(line + "\n")
         # _saveLine("Writing settings:")
-        self.printSettingsDocumentation(print_callback=_saveLine)
+        GCodeFollower.printSettingsDocumentation(print_callback=_saveLine)
 
-    def printSettingsDocumentation(self, print_callback=error):
+    @staticmethod
+    def printSettingsDocumentation(print_callback=error):
         print_callback(
             "You can edit \"{}\" to change settings".format(
                 self._settingsPath
@@ -473,37 +548,27 @@ class GCodeFollower:
                 or (value > self.max_temperature)):
             self.max_temperature = value
 
-    def checkSettings(self, allow_previous_settings=True,
-                      verbose=None, template_gcode_path=None,
-                      temperatures=None):
+    def checkSettings(self):
         """
         This ensures that everything in the settings dictionary is
         correct. Call self.enableUI(True) if it fails, since this is
         not guaranteed to do that.
+        The following are the values checked:
+        template_gcode_path -- If None, default_path is used.
+        temperature -- This must be a list of 2 temperatures, otherwise
+            ValueError is raised.
+
+
         Incorrect setting(s) will cause the following:
         - raise ValueError if max_temperature or min_temperature are not
           present or not set properly.
         - raise FileNotFoundError if src_path is missing.
 
-        Keyword arguments:
-        verbose -- Set whether to show additional messages. If None,
-            self._verbose will be used.
-        temperatures -- Provide a minimum and maximum temperature--If
-            neither None nor len(temperatures) == 2, then raise
-            ValueError.
         """
-        if verbose is None:
-            verbose = self._verbose
+        verbose = self._verbose
         getV = self.getVar
         self.error = None
 
-        if template_gcode_path is not None:
-            self.setVar("template_gcode_path", template_gcode_path)
-            if verbose:
-                print(
-                    "* checkSettings set the tower path to {}..."
-                    "".format(encVal(getV("template_gcode_path")))
-                )
         if self.getVar("template_gcode_path") is not None:
             if verbose:
                 print(
@@ -511,11 +576,6 @@ class GCodeFollower:
                     ''.format(encVal(getV("template_gcode_path")))
                 )
         else:
-            if self._verbose:
-                error('  * template_gcode_path is {} in checkSettings'
-                      ''.format(encVal(template_gcode_path)))
-            if verbose:
-                print("")
             self.setVar("template_gcode_path",
                         getV("default_path"))
             if verbose:
@@ -566,26 +626,14 @@ class GCodeFollower:
         else:
             if os.path.isfile(notePath):
                 os.remove(notePath)
-        if temperatures is not None:
-            if len(temperatures) != 2:
-                raise ValueError("You must provide a list-like"
-                                 " structure containing two values"
-                                 " or None for defaults.")
-            self.setRangeVar("temperature", 0, temperatures[0])
-            self.setRangeVar("temperature", 1, temperatures[1])
-        else:
-            if allow_previous_settings:
-                for i in range(2):
-                    if self.getRangeVar("temperature", i) is None:
-                        self.enableUI(True)
-                        raise ValueError(
-                            (self.getRangeVarName("temperature", i)
-                             + " is missing.")
-                        )
-            else:
+
+        for i in range(2):
+            if self.getRangeVar("temperature", i) is None:
                 self.enableUI(True)
-                raise ValueError("You did not set the program"
-                                 " parameters as script arguments.")
+                raise ValueError(
+                    (self.getRangeVarName("temperature", i)
+                     + " is missing.")
+                )
 
         # Find these OR the next highest (will differ based on layer
         # height and Slic3r Z offset setting; which may also be
