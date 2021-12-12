@@ -43,7 +43,6 @@ from gcodefollower import GCodeFollower
 
 gcode = None
 
-
 class ConfigurationFrame(ttk.Frame):
     def __init__(self, parent):
         global gcode
@@ -113,10 +112,12 @@ class ConfigurationFrame(ttk.Frame):
             # Even if it returns True, don't save settings yet since
             # gcode.generateTower will do that.
         except ValueError as ex:
+            self.enableUI(True)
             self.echo("The temperatures must be integers or Generate"
                       " cannot proceed.")
             self.echo(str(ex))
         except FileNotFoundError:
+            self.enableUI(True)
             # self.echo("")
             # checkSettings already called echo_callback in this case.
             pass
@@ -146,15 +147,19 @@ class ConfigurationFrame(ttk.Frame):
             print(msg)
 
     def enableUI(self, enable):
+        state = tk.DISABLED
         if enable:
-            self.generateButton.config(state=tk.NORMAL)
-        else:
-            self.generateButton.config(state=tk.DISABLED)
+            state = tk.NORMAL
+        # self.generateButton['state'] = state
+        self.generateButton.config(state=state)
+
 
     def generateTower(self):
         self.pushSettings()
-        gcode.enableUI(False)  # generateTower will call
-        #                      # enable_ui_callback(true).
+        gcode.enableUI(False)
+        # ^ generateTower MUST call enable_ui_callback(true) even if
+        #   there is an error.
+
         # Start a thread, so that events related to enableUI(False) can
         # occur before processing.
         # gcode._verbose = True
@@ -162,6 +167,8 @@ class ConfigurationFrame(ttk.Frame):
             self.generateTimer = threading.Timer(0.01,
                                                  gcode.generateTower)
             self.generateTimer.start()
+        else:
+            self.enableUI(True)
 
 
 def main():

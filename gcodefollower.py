@@ -32,10 +32,29 @@ def error(msg):
 
 
 def get_cmd_meta(cmd):
-    comment_i = cmd.find(";")
-    if comment_i >= 0:
+    comment_i = None
+    '''
+    commentMarks = [";", "//"]
+    for commentMark in commentMarks:
+      tryI = cmd.find(commentMark)
+      if tryI >= 0:
+          if (comment_i is None) or (tryI < comment_i):
+              comment_i = tryI
+    '''
+    tryI = cmd.find(";")
+    if tryI >= 0:
+        # if (comment_i is None) or (tryI < comment_i):
+        comment_i = tryI
+    if cmd.strip().startswith("/"):
+        # ^ as per <https://www.cnccookbook.com/
+        #   g-code-basics-program-format-structure-blocks/>
+        # (also takes care of non-standard // comments)
+        comment_i = cmd.find("/")
+    if comment_i is not None:
         cmd = cmd[0:comment_i]
+
     cmd = cmd.strip()
+    # print("cmd={}".format(cmd))
     if len(cmd) < 1:
         return None
     if cmd[0] == ";":
@@ -433,7 +452,9 @@ class GCodeFollower:
                       verbose=False):
         """
         This ensures that everything in the settings dictionary is
-        correct, and will do the following if not:
+        correct. Call self.enableUI(True) if it fails, since this is
+        not guaranteed to do that.
+        Incorrect setting(s) will cause the following:
         - raise ValueError if max_temperature or min_temperature are not
           present or not set properly.
         - raise FileNotFoundError if src_path is missing.
@@ -702,6 +723,13 @@ class GCodeFollower:
         self.stats_lines = {}  # what line# provides the value of a stat
 
     def generateTower(self):
+        try:
+            self._generateTower()
+        except Exception as ex:
+            self.enableUI(True)
+            raise ex
+
+    def _generateTower(self):
         getV = self.getVar
         getS = self.getStat
         setS = self.setStat
