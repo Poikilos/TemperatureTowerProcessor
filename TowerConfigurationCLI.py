@@ -123,6 +123,10 @@ def main():
     print("Welcome to Tower Configuration by Poikilos.")
     print("")
     runParams = GCodeFollowerArgParser()
+    if runParams.help:
+        gcode = GCodeFollower()  # Initialize the help system.
+        usage()
+        sys.exit(0)
     Application()
 
 

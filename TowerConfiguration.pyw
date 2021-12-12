@@ -46,6 +46,7 @@ from gcodefollower import (
     GCodeFollowerArgParser,
     error,
     encVal,
+    usage,
 )
 
 gcode = None
@@ -204,6 +205,10 @@ def main():
     root.title("Tower Configuration by Poikilos")
 
     runParams = GCodeFollowerArgParser()
+    if runParams.help:
+        gcode = GCodeFollower()  # Initialize the help system.
+        usage()
+        sys.exit(0)
     frame = ConfigurationFrame(root)
 
 

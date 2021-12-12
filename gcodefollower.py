@@ -155,6 +155,7 @@ class GCodeFollowerArgParser():
         self.temperatures = None
         self.template_gcode_path = None
         self.verbose = False
+        self.help = False
         seqArgs = []
 
         for argI in range(1, len(sys.argv)):
@@ -162,6 +163,8 @@ class GCodeFollowerArgParser():
             if arg == "--verbose":
                 self.verbose = True
                 error("* Verbose mode is enabled.")
+            elif arg == "--help":
+                self.help = True
             elif arg.startswith("--"):
                 raise ValueError("The argument {} is invalid."
                                  "".format(arg))
@@ -197,6 +200,9 @@ class GCodeFollower:
     _end_retraction_flag = "filament slightly"
     _rangeNames = ["min", "max"]
     _settingsDocPath = "settings descriptions.txt"
+    _settingsPath = "settings.json"
+    _settings_types = {}
+    _settings_descriptions = {}
 
     @staticmethod
     def getDocumentation():
@@ -213,7 +219,7 @@ class GCodeFollower:
                  verbose=False):
         """
         Change settings via setVar and self.getVar. Call
-        "getSettingsNames" to get a list of all settings. Call "help"
+        "getSettingsNames" to get a list of all settings. Call "getHelp"
         to see the documentation for each setting, preceded by the type
         in parenthesis.
 
@@ -226,8 +232,7 @@ class GCodeFollower:
         """
         self._verbose = (verbose is True)
         self._settings = {}
-        self._settings_types = {}
-        self._settings_descriptions = {}
+
         self.stats = {}
         self._createVar("template_gcode_path", None, "str",
                         "Look here for the source gcode of the"
@@ -263,7 +268,6 @@ class GCodeFollower:
                                 " tower by temperature_step, finish the"
                                 " level that is this temperature then"
                                 " stop printing."))
-        self._settingsPath = "settings.json"
         self._stop_building_msg = ("; GCodeFollower says: stop_building"
                                    " (additional build-related codes"
                                    " that were below will be excluded)")
@@ -365,12 +369,13 @@ class GCodeFollower:
     def printSettingsDocumentation(print_callback=error):
         print_callback(
             "You can edit \"{}\" to change settings".format(
-                self._settingsPath
+                GCodeFollower._settingsPath
             )
         )
         # being careful to maintain the JSON format properly (try
         # pasting your settings into https://jsonlint.com/ if you're
-        # not sure, then copy from there).".format(self._settingsPath)
+        # not sure, then copy from there)."
+        # "".format(GCodeFollower._settingsPath)
         # print("If you write a Python program that imports"
         #       " GCodeFollower, you can set an individual setting by"
         #       " calling the setVar method on a GCodeFollower object"
@@ -378,10 +383,14 @@ class GCodeFollower:
         #       " method.")
         print_callback("")
         print_callback("Settings:")
-        names = self.getSettingsNames()
+        names = GCodeFollower.getSettingsNames()
+        if len(names) < 1:
+            raise RuntimeError("printSettingsDocumentation must be"
+                               " called after an instance defines"
+                               " variables.")
         for name in names:
             print_callback("- " + name + ": "
-                           + self.help(name))
+                           + GCodeFollower.getHelp(name))
 
     def setVar(self, name, value):
         """
@@ -391,7 +400,7 @@ class GCodeFollower:
         if name not in self._settings:
             raise KeyError("{} is not a valid setting.".format(name))
         if value is not None:
-            python_type = self._settings_types[name]
+            python_type = GCodeFollower._settings_types[name]
             if type(value).__name__ != "str":
                 if python_type == "int":
                     value = int(value)
@@ -422,7 +431,7 @@ class GCodeFollower:
     def castVar(self, name, value):
         if value is None:
             return None
-        return cast_by_type_string(self._settings_types[name], value)
+        return cast_by_type_string(GCodeFollower._settings_types[name], value)
 
     def getVar(self, name, prevent_exceptions=False):
         # if prevent_exceptions:
@@ -437,9 +446,9 @@ class GCodeFollower:
             if result is None:
                 return None
             return cast_by_type_string(result,
-                                       self._settings_types[name])
+                                       GCodeFollower._settings_types[name])
         return cast_by_type_string(self._settings[name],
-                                   self._settings_types[name])
+                                   GCodeFollower._settings_types[name])
 
     def getRangeVar(self, name, i):
         return self.getVar(self.getRangeVarName(name, i))
@@ -466,8 +475,8 @@ class GCodeFollower:
 
     def _createVar(self, name, value, python_type, description):
         self._settings[name] = cast_by_type_string(value, python_type)
-        self._settings_types[name] = python_type
-        self._settings_descriptions[name] = description
+        GCodeFollower._settings_types[name] = python_type
+        GCodeFollower._settings_descriptions[name] = description
 
     def getListVar(self, name, i, prevent_exceptions=True):
         return self.getVar(name + "[" + str(i) + "]",
@@ -476,16 +485,18 @@ class GCodeFollower:
     def setListVar(self, name, i, value):
         self.setVar(name + "[" + str(i) + "]", value)
 
-    def help(self, name):
+    @staticmethod
+    def getHelp(name):
         """
         Get the documentation for a setting, preceded by the type in
         parenthesis.
         """
-        return ("(" + self._settings_types[name] + ") "
-                + self._settings_descriptions[name])
+        return ("(" + GCodeFollower._settings_types[name] + ") "
+                + GCodeFollower._settings_descriptions[name])
 
-    def getSettingsNames(self):
-        return self._settings.keys()
+    @staticmethod
+    def getSettingsNames():
+        return GCodeFollower._settings_types.keys()
 
     def saveSettings(self):
         serializable_settings = {}
@@ -494,13 +505,13 @@ class GCodeFollower:
                 serializable_settings[k] = str(v)
             else:
                 serializable_settings[k] = v
-        with open(self._settingsPath, 'w') as outs:
+        with open(GCodeFollower._settingsPath, 'w') as outs:
             json.dump(serializable_settings, outs, indent=4)
             # sort_keys=True)
 
     def loadSettings(self):
         self.error = None
-        with open(self._settingsPath) as ins:
+        with open(GCodeFollower._settingsPath) as ins:
             tmp_settings = json.load(ins)
             # Use a temp file in case the file is missing any settings.
             for k, originalV in tmp_settings.items():
@@ -874,7 +885,8 @@ class GCodeFollower:
                 self.enableUI(True)
                 return False
             else:
-                print("* saving '" + self._settingsPath + "'...")
+                print('* saving "{}"...'
+                      ''.format(GCodeFollower._settingsPath))
                 self.saveSettings()
         except Exception as e:
             self.echo(str(e))
