@@ -39,15 +39,27 @@ except ImportError as ex2:
         print()
         exit(1)
 
-from gcodefollower import GCodeFollower
+from gcodefollower import (
+    GCodeFollower,
+    error,
+    encVal,
+)
 
 gcode = None
+verbose = False
+
+def debug(msg):
+    if not verbose:
+        return
+    error(msg)
 
 class ConfigurationFrame(ttk.Frame):
     def __init__(self, parent):
+        debug("* initializing ConfigurationFrame...")
         global gcode
         gcode = GCodeFollower(echo_callback=self.echo,
-                              enable_ui_callback=self.enableUI)
+                              enable_ui_callback=self.enableUI,
+                              verbose=verbose)
         gcode.saveDocumentationOnce()
         self.generateTimer = None
         self.templateGCodePath = tk.StringVar()
@@ -100,7 +112,11 @@ class ConfigurationFrame(ttk.Frame):
         for child in self.winfo_children():
             child.grid_configure(padx=6, pady=3)
         # (Urban & Murach, 2016, p. 515)
-        self.checkSettingsAndShow()
+        if not self.checkSettingsAndShow():
+            print("^ Ignore settings errors above unless trying to"
+                  " run non-interactively, because the error"
+                  " occurred on startup.")
+
         self.pullSettings()  # Get the path even if temperature is bad.
         if not os.path.isfile(gcode._settingsPath):
             gcode.saveSettings()
@@ -108,14 +124,21 @@ class ConfigurationFrame(ttk.Frame):
 
     def checkSettingsAndShow(self):
         try:
-            return gcode.checkSettings()
+            debug("* template_gcode_path: {} in {}"
+                  .format(encVal(template_gcode_path),
+                          'checkSettingsAndShow'))
+            return gcode.checkSettings(
+                verbose=verbose,
+                template_gcode_path=template_gcode_path,
+                temperatures=temperatures,
+            )
             # Even if it returns True, don't save settings yet since
             # gcode.generateTower will do that.
         except ValueError as ex:
             self.enableUI(True)
             self.echo("The temperatures must be integers or Generate"
-                      " cannot proceed.")
-            self.echo(str(ex))
+                      " cannot proceed:")
+            self.echo("- {}".format(ex))
         except FileNotFoundError:
             self.enableUI(True)
             # self.echo("")
@@ -124,6 +147,7 @@ class ConfigurationFrame(ttk.Frame):
         return False
 
     def pushSettings(self):
+        debug("* setting ranged vars:")
         for i in range(2):
             gcode.setRangeVar("temperature", i,
                               self.temperatureVs[i].get())
@@ -162,7 +186,6 @@ class ConfigurationFrame(ttk.Frame):
 
         # Start a thread, so that events related to enableUI(False) can
         # occur before processing.
-        # gcode._verbose = True
         if self.checkSettingsAndShow():
             self.generateTimer = threading.Timer(0.01,
                                                  gcode.generateTower)
@@ -170,12 +193,44 @@ class ConfigurationFrame(ttk.Frame):
         else:
             self.enableUI(True)
 
+template_gcode_path = None
+temperatures = None
 
 def main():
     global root
     root = tk.Tk()
     root.title("Tower Configuration by Poikilos")
-    ConfigurationFrame(root)
+    global verbose
+    global template_gcode_path
+    global temperatures
+    seqArgs = []
+    for argI in range(1, len(sys.argv)):
+        arg = sys.argv[argI]
+        if arg == "--verbose":
+            verbose = True
+            debug("* Verbose mode is enabled.")
+        elif arg.startswith("--"):
+            raise ValueError("The argument {} is invalid.".format(arg))
+        else:
+            seqArgs.append(arg)
+
+    frame = ConfigurationFrame(root)
+
+    debug("seqArgs={}".format(seqArgs))
+    if (len(seqArgs) == 1) or (len(seqArgs) == 3):
+        template_gcode_path = seqArgs[0]
+        debug("* template_gcode_path is {}".format(template_gcode_path))
+        frame.templateGCodePath.set(template_gcode_path)
+
+    if len(seqArgs) == 3:
+        temperatures = [seqArgs[1], seqArgs[2]]
+    elif len(seqArgs) == 2:
+        temperatures = [seqArgs[0], seqArgs[1]]
+    if temperatures is not None:
+        debug("* temperatures is set to {}".format(temperatures))
+        frame.temperatureVs[0].set(temperatures[0])
+        frame.temperatureVs[1].set(temperatures[1])
+
     root.mainloop()
     # (Urban & Murach, 2016, p. 515)
 

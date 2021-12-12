@@ -24,11 +24,28 @@ import copy
 import shutil
 import json
 import decimal
+import inspect
+
 from decimal import Decimal
 
 
 def error(msg):
     sys.stderr.write("{}\n".format(msg))
+
+
+def encVal(v):
+    '''
+    Get the encoded value as would appear in Python code.
+    '''
+    if v is None:
+        return "None"
+    if v is True:
+        return "True"
+    if v is False:
+        return "False"
+    elif isinstance(v, str):
+        return '"{}"'.format(v)
+    return str(v)
 
 
 def get_cmd_meta(cmd):
@@ -119,7 +136,8 @@ class GCodeFollower:
                 " GCodeFollower._end_retraction_flag).")
         return msg
 
-    def __init__(self, echo_callback=None, enable_ui_callback=None):
+    def __init__(self, echo_callback=None, enable_ui_callback=None,
+                 verbose=False):
         """
         Change settings via setVar and self.getVar. Call
         "getSettingsNames" to get a list of all settings. Call "help"
@@ -133,7 +151,7 @@ class GCodeFollower:
             a boolean. It will be called with false whenever a process
             starts and true whenever a process ends.
         """
-        self._verbose = False
+        self._verbose = (verbose is True)
         self._settings = {}
         self._settings_types = {}
         self._settings_descriptions = {}
@@ -311,6 +329,10 @@ class GCodeFollower:
                                      " {}.".format(name, python_type))
         # else: allow setting it to None.
         self._settings[name] = value
+        if self._verbose:
+            error("  * {} set {} to {}"
+                  "".format(inspect.stack()[1][3], name,
+                            self.getVar(name)))
 
     def getRangeVarName(self, name, i):
         return GCodeFollower._rangeNames[i] + "_" + name
@@ -406,8 +428,11 @@ class GCodeFollower:
         with open(self._settingsPath) as ins:
             tmp_settings = json.load(ins)
             # Use a temp file in case the file is missing any settings.
-            for k, v in tmp_settings.items():
+            for k, originalV in tmp_settings.items():
+                v = originalV
                 if k in self._settings:
+                    if v == "None":
+                        v = None
                     self._settings[k] = castVar(k, v)
                 else:
                     if self.error is None:
@@ -449,7 +474,8 @@ class GCodeFollower:
             self.max_temperature = value
 
     def checkSettings(self, allow_previous_settings=True,
-                      verbose=False):
+                      verbose=None, template_gcode_path=None,
+                      temperatures=None):
         """
         This ensures that everything in the settings dictionary is
         correct. Call self.enableUI(True) if it fails, since this is
@@ -458,27 +484,44 @@ class GCodeFollower:
         - raise ValueError if max_temperature or min_temperature are not
           present or not set properly.
         - raise FileNotFoundError if src_path is missing.
+
+        Keyword arguments:
+        verbose -- Set whether to show additional messages. If None,
+            self._verbose will be used.
+        temperatures -- Provide a minimum and maximum temperature--If
+            neither None nor len(temperatures) == 2, then raise
+            ValueError.
         """
+        if verbose is None:
+            verbose = self._verbose
         getV = self.getVar
         self.error = None
 
-        if (len(sys.argv) == 2) or (len(sys.argv) == 4):
-            self.setVar("template_gcode_path", sys.argv[1])
+        if template_gcode_path is not None:
+            self.setVar("template_gcode_path", template_gcode_path)
             if verbose:
                 print(
-                    "* You set the tower path to '{}'...".format(
-                        getV("template_gcode_path")
-                    )
+                    "* checkSettings set the tower path to {}..."
+                    "".format(encVal(getV("template_gcode_path")))
+                )
+        if self.getVar("template_gcode_path") is not None:
+            if verbose:
+                print(
+                    '* using template_gcode_path from settings: {}...'
+                    ''.format(encVal(getV("template_gcode_path")))
                 )
         else:
+            if self._verbose:
+                error('  * template_gcode_path is {} in checkSettings'
+                      ''.format(encVal(template_gcode_path)))
             if verbose:
                 print("")
             self.setVar("template_gcode_path",
                         getV("default_path"))
             if verbose:
                 print(
-                    "* checking for '{}'...".format(
-                        getV("template_gcode_path")
+                    '* checking for {}...'.format(
+                        encVal(getV("template_gcode_path")),
                     )
                 )
                 print("")
@@ -488,8 +531,8 @@ class GCodeFollower:
             if verbose:
                 print("")
                 print(
-                    "'{}' does not exist.".format(
-                        getV("template_gcode_path")
+                    "{} does not exist.".format(
+                        encVal(getV("template_gcode_path"))
                     )
                 )
             msg = ("You must slice " + GCodeFollower._towerName
@@ -497,6 +540,7 @@ class GCodeFollower:
             for thisURL in GCodeFollower._downloadPageURLs:
                 msg += "\n- " + thisURL
             msg += "\nas {}".format(getV("template_gcode_path"))
+            notePathMsg = ""
             if getV("template_gcode_path") == getV("default_path"):
                 notePathMsg = ""
                 exMessage = ""
@@ -522,13 +566,13 @@ class GCodeFollower:
         else:
             if os.path.isfile(notePath):
                 os.remove(notePath)
-
-        if len(sys.argv) == 4:
-            self.setRangeVar("temperature", 0, sys.argv[2])
-            self.setRangeVar("temperature", 1, sys.argv[3])
-        elif len(sys.argv) == 3:
-            self.setRangeVar("temperature", 0, sys.argv[1])
-            self.setRangeVar("temperature", 1, sys.argv[2])
+        if temperatures is not None:
+            if len(temperatures) != 2:
+                raise ValueError("You must provide a list-like"
+                                 " structure containing two values"
+                                 " or None for defaults.")
+            self.setRangeVar("temperature", 0, temperatures[0])
+            self.setRangeVar("temperature", 1, temperatures[1])
         else:
             if allow_previous_settings:
                 for i in range(2):
@@ -800,7 +844,9 @@ class GCodeFollower:
         bytes_count = 0
         setS("progress", "0%", -1)
         prev_line_len = 0
-        with open(getV("template_gcode_path")) as ins:
+        template_gcode_path = getV("template_gcode_path")
+        print("* reading \"{}\"...".format(template_gcode_path))
+        with open(template_gcode_path) as ins:
             with open(tmp_path, 'w') as outs:
                 line_number = 0
                 for original_line in ins:
