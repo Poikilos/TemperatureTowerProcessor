@@ -69,7 +69,7 @@ class ConfigurationFrame(ttk.Frame):
         gcode = GCodeFollower(echo_callback=self.echo,
                               enable_ui_callback=self.enableUI,
                               verbose=runParams.verbose)
-        # gcode.loadSettings()
+        gcode.loadSettings()
         gcode.saveDocumentationOnce()
         self.generateTimer = None
         self.templateGCodePath = tk.StringVar()

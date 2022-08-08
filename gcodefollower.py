@@ -726,7 +726,7 @@ class GCodeFollower:
     def castVar(self, name, value):
         if value is None:
             return None
-        return cast_by_type_string(GCodeFollower._settings_types[name], value)
+        return cast_by_type_string(value, GCodeFollower._settings_types[name])
 
     def getVar(self, name, prevent_exceptions=False):
         # if prevent_exceptions:
@@ -740,6 +740,7 @@ class GCodeFollower:
         if prevent_exceptions:
             if result is None:
                 return None
+        # echo0(json.dumps(self._settings))
         return cast_by_type_string(result, GCodeFollower._settings_types[name])
 
     def getRangeVar(self, name, i):
