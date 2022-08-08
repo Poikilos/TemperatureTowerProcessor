@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 from __future__ import print_function
 from __future__ import division
+
 '''
 This program changes and inserts temperatures into gcode that builds a
 temperature tower.
 Copyright (C) 2019  Jake "Poikilos" Gustafson
 '''
+import sys
+import os
+import copy
+import shutil
+import json
+import decimal
+import inspect
+import math
+
+from decimal import Decimal
 
 CLI_HELP = '''
 
@@ -40,26 +51,49 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 '''
 
-import sys
-import os
-import copy
-import shutil
-import json
-import decimal
-import inspect
-import math
 
-from decimal import Decimal
+verbosity = 0
+for argI in range(1, len(sys.argv)):
+    arg = sys.argv[argI]
+    if arg.startswith("--"):
+        if arg == "--verbosity":
+            verbosity = 1
+        elif arg == "--debug":
+            verbosity = 2
 
 
-def error(msg):
-    sys.stderr.write("{}\n".format(msg))
-
-def debug(msg):
+def debug(*args, **kwargs):
     '''
-    The Main class should override this and use its own verbose setting.
+    The Main class should override this and use its own verbose setting
+    (See Main class code:
+    global debug
+    debug = self.debug
+    )
     '''
-    error(msg)
+    print(*args, file=sys.stderr, **kwargs)
+    return True
+
+
+def echo0(*args, **kwargs):  # formerly error
+    print(*args, file=sys.stderr, **kwargs)
+    return True
+
+
+def echo1(*args, **kwargs):
+    global verbosity
+    if verbosity < 1:
+        return False
+    print(*args, file=sys.stderr, **kwargs)
+    return True
+
+
+def echo2(*args, **kwargs):
+    global verbosity
+    if verbosity < 2:
+        return False
+    print(*args, file=sys.stderr, **kwargs)
+    return True
+
 
 def usage():
     # print(CLI_HELP)
@@ -70,9 +104,9 @@ def usage():
 
 def round_nearest(x):
     '''
-    This function circumvents the new Python 3 behavior where round uses "banker's rounding"
-    to "limit the accumulation of errors when summing a list of rounded
-    integers" (according to remi.lapeyre on
+    This function circumvents the new Python 3 behavior where round uses
+    "banker's rounding" to "limit the accumulation of errors when
+    summing a list of rounded integers" (according to remi.lapeyre on
     <https://bugs.python.org/issue36082>).
     - The result of banker's rounding is that round(1.5) is 2 and
       round(2.5) is 2 and round(2.51) is 3. Rounding even numbers
@@ -103,9 +137,11 @@ def getHMSFromS(estSec):
     estLeft = round(estLeft)
     return int(estHr), int(estMin), round(estLeft)
 
+
 def getHMSMessageFromS(estSec):
     h, m, s = getHMSFromS(estSec)
     return "{}h{}m{}s".format(h, m, s)
+
 
 def encVal(v):
     '''
@@ -181,7 +217,7 @@ def get_cmd_meta(cmd):
             try:
                 fv = float(v)
             except ValueError as ex:
-                error('WARNING: "{}" is not a number in "{}"'
+                echo0('WARNING: "{}" is not a number in "{}"'
                       ''.format(v, cmd))
             cmd_meta.append([k, v])
         else:
@@ -203,7 +239,7 @@ def cmd_meta_dict(cmd_meta):
     for pair in cmd_meta:
         if metaD.get('function') is None:
             if len(pair) != 2:
-                error("WARNING: The G-code command doesn't have"
+                echo0("WARNING: The G-code command doesn't have"
                       " 2 parts: {} in {}"
                       "".format(pair, cmd_meta))
                 metaD['function'] = ''  # prevent gathering it again
@@ -258,7 +294,7 @@ class GCodeFollowerArgParser():
             arg = sys.argv[argI]
             if arg == "--verbose":
                 self.verbose = True
-                error("* Verbose mode is enabled.")
+                echo0("* Verbose mode is enabled.")
             elif arg == "--help":
                 self.help = True
             elif arg.startswith("--"):
@@ -381,12 +417,12 @@ class GCodeFollower:
         self._createVar("level_count", 10, "int",
                         "This is how many levels are in the source"
                         " gcode file.")
-        self._createVar("level_height", "13.500", "Decimal",
+        self._createVar("level_height", "10.0", "Decimal",
                         "The height of each level excluding levels"
                         " (special_heights can override this for"
                         " individual levels of the tower).")
-        self._createVar("special_heights[0]", "16.201", "Decimal",
-                        "This is the level of the first floor and any"
+        self._createVar("special_heights[0]", "11.4", "Decimal",
+                        "This is the height of the first floor and any"
                         " other floors that don't match level_height"
                         " (must be consecutive).")
         self._createVar("temperature_step", "5", "int",
@@ -625,7 +661,7 @@ class GCodeFollower:
         GCodeFollower.printSettingsDocumentation(print_callback=_saveLine)
 
     @staticmethod
-    def printSettingsDocumentation(print_callback=error):
+    def printSettingsDocumentation(print_callback=echo0):
         print_callback(
             "You can edit \"{}\" to change settings".format(
                 GCodeFollower._settingsPath
@@ -673,7 +709,7 @@ class GCodeFollower:
         # else: allow setting it to None.
         self._settings[name] = value
         if self._verbose:
-            error("  * {} set {} to {}"
+            echo0("  * {} set {} to {}"
                   "".format(inspect.stack()[1][3], name,
                             self.getVar(name)))
 
@@ -699,15 +735,12 @@ class GCodeFollower:
         #         return self.castVar(name, result)
         #     else:
         #         return None
-        # return castVar(name, self._settings[name])
+        # return self.castVar(name, self._settings[name])
+        result = self._settings.get(name)
         if prevent_exceptions:
-            result = self._settings.get(name)
             if result is None:
                 return None
-            return cast_by_type_string(result,
-                                       GCodeFollower._settings_types[name])
-        return cast_by_type_string(self._settings[name],
-                                   GCodeFollower._settings_types[name])
+        return cast_by_type_string(result, GCodeFollower._settings_types[name])
 
     def getRangeVar(self, name, i):
         return self.getVar(self.getRangeVarName(name, i))
@@ -769,6 +802,7 @@ class GCodeFollower:
             # sort_keys=True)
 
     def loadSettings(self):
+        echo0("Loading settings...")
         self.error = None
         with open(GCodeFollower._settingsPath) as ins:
             tmp_settings = json.load(ins)
@@ -778,7 +812,7 @@ class GCodeFollower:
                 if k in self._settings:
                     if v == "None":
                         v = None
-                    self._settings[k] = castVar(k, v)
+                    self._settings[k] = self.castVar(k, v)
                 else:
                     if self.error is None:
                         self.error = ""
@@ -972,7 +1006,6 @@ class GCodeFollower:
         #                      + self.getRangeVarName("temperature", 1)
         #                      + "' is missing (you must set this).")
 
-
         prevTemp = None
         for thisTemp in temps:
             if (prevTemp is not None) and (thisTemp < prevTemp):
@@ -1112,7 +1145,7 @@ class GCodeFollower:
     def debug(self, msg):
         if not self._verbose:
             return
-        error("[debug] {}".format(msg))
+        echo0("[debug] {}".format(msg))
 
     def getBedSecRelTemp(self, S):
         '''
@@ -1131,7 +1164,6 @@ class GCodeFollower:
         # room temperature of about 22C to 58C: 213s/36degrees
         # = 5.91666666666666666667 sec/deg
         return float(diff) * bedSecPerDegree
-
 
     def addSec(self, gcodeLine):
         '''
@@ -1165,7 +1197,7 @@ class GCodeFollower:
             # such as {'M': '104', 'S': '210'}
             S = meta.get('S')
             if S is None:
-                error('WARNING: S is None in "{}"'
+                echo0('WARNING: S is None in "{}"'
                       ''.format(cmd_meta))
             else:
                 S = float(S)
@@ -1177,11 +1209,12 @@ class GCodeFollower:
             pass
         elif f == "M109":
             # Wait for hotend temperature
-            # Usage: M109 [B<temp>] [F<flag>] [I<index>] [R<temp>] [S<temp>] [T<index>]
+            # Usage:
+            # M109 [B<temp>] [F<flag>] [I<index>] [R<temp>] [S<temp>] [T<index>]
             # such as {'M': '109', 'S': '210'}
             S = meta.get('S')
             if S is None:
-                error('WARNING: S is None in "{}"'
+                echo0('WARNING: S is None in "{}"'
                       ''.format(cmd_meta))
             else:
                 S = float(S)
@@ -1217,7 +1250,7 @@ class GCodeFollower:
                 self._estS += S
                 debug("_estSec += {} dwell".format(S))
             else:
-                error('WARNING: S & P are None in "{}"'
+                echo0('WARNING: S & P are None in "{}"'
                       ''.format(cmd_meta))
         elif f == "M420":
             # Get and/or set bed leveling state
@@ -1316,7 +1349,7 @@ class GCodeFollower:
                 if oldF is not None:
                     F = oldF
                 else:
-                    error("WARNING: The feedrate is unknown at {}."
+                    echo0("WARNING: The feedrate is unknown at {}."
                           "".format(cmd_meta))
                 return
             else:
@@ -1352,7 +1385,7 @@ class GCodeFollower:
                       "".format(feedTime, eDiff, feedPerSec))
                 self.setEPos(E)
             else:
-                error('WARNING: Estimating "{}" is not possible since'
+                echo0('WARNING: Estimating "{}" is not possible since'
                       ' there was no X, Y, Z, nor E movement.'
                       ''.format(cmd_meta))
 
@@ -1378,7 +1411,7 @@ class GCodeFollower:
             # Disable motors.
             pass
         else:
-            error("WARNING: The command isn't emulated for estimates"
+            echo0("WARNING: The command isn't emulated for estimates"
                   " or other uses: {}"
                   "".format(cmd_meta))
         # Additional relevant commands:
@@ -1787,9 +1820,7 @@ class GCodeFollower:
                                             setS("stop_building", True,
                                                  line_number)
                                             print("ESTIMATE: {}s"
-                                                  "".format(
-                                                    self._estS
-                                            ))
+                                                  "".format(self._estS))
                                             self._extrudeS = (
                                                 self._estS
                                             )

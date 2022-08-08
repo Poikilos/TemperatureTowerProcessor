@@ -1,26 +1,12 @@
 #!/usr/bin/env python3
-from __future__ import print_function
-from __future__ import division
 '''
 This program changes and inserts temperatures into gcode that builds a
 temperature tower.
 Copyright (C) 2019  Jake "Poikilos" Gustafson
 '''
 
-'''
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
-'''
+from __future__ import print_function
+from __future__ import division
 import os
 import sys
 import decimal
@@ -45,26 +31,45 @@ except ImportError as ex2:
 from gcodefollower import (
     GCodeFollower,
     GCodeFollowerArgParser,
-    error,
+    echo0,
     encVal,
     usage,
 )
 
+'''
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+'''
+
 gcode = None
 runParams = None
 
-def debug(msg):
+
+def echo1(msg):
+    global runParams
     if not runParams.verbose:
         return
-    error(msg)
+    echo0(msg)
+
 
 class ConfigurationFrame(ttk.Frame):
     def __init__(self, parent):
-        debug("* initializing ConfigurationFrame...")
+        echo1("* initializing ConfigurationFrame...")
         global gcode
         gcode = GCodeFollower(echo_callback=self.echo,
                               enable_ui_callback=self.enableUI,
                               verbose=runParams.verbose)
+        # gcode.loadSettings()
         gcode.saveDocumentationOnce()
         self.generateTimer = None
         self.templateGCodePath = tk.StringVar()
@@ -129,7 +134,7 @@ class ConfigurationFrame(ttk.Frame):
 
     def checkSettingsAndShow(self):
         try:
-            debug(
+            echo1(
                 "* template_gcode_path: {} in {}"
                 "".format(
                     encVal(gcode.getVar('template_gcode_path')),
@@ -152,7 +157,7 @@ class ConfigurationFrame(ttk.Frame):
         return False
 
     def pushSettings(self):
-        debug("* setting ranged vars:")
+        echo1("* setting ranged vars:")
         for i in range(2):
             gcode.setRangeVar("temperature", i,
                               self.temperatureVs[i].get())
@@ -160,6 +165,11 @@ class ConfigurationFrame(ttk.Frame):
                      self.templateGCodePath.get())
 
     def pullSettings(self):
+        '''
+        Keyword arguments:
+        prevent_exceptions -- This is True by default so a bad config
+            file doesn't prevent the GUI from appearing.
+        '''
         for i in range(2):
             v = gcode.getRangeVar("temperature", i)
             if v is not None:
@@ -181,7 +191,6 @@ class ConfigurationFrame(ttk.Frame):
             state = tk.NORMAL
         # self.generateButton['state'] = state
         self.generateButton.config(state=state)
-
 
     def generateTower(self):
         self.pushSettings()
@@ -212,15 +221,13 @@ def main():
         sys.exit(0)
     frame = ConfigurationFrame(root)
 
-
     if runParams.template_gcode_path is not None:
-        debug("* template_gcode_path is set to {}"
+        echo1("* template_gcode_path is set to {}"
               "".format(runParams.template_gcode_path))
         frame.templateGCodePath.set(runParams.template_gcode_path)
 
-
     if runParams.temperatures is not None:
-        debug("* temperatures is set to {}"
+        echo1("* temperatures is set to {}"
               "".format(runParams.temperatures))
         frame.temperatureVs[0].set(runParams.temperatures[0])
         frame.temperatureVs[1].set(runParams.temperatures[1])

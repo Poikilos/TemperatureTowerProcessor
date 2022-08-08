@@ -1,0 +1,11 @@
+{
+    "template_gcode_path": "tower-TPU-lh=.2-20mms.gcode",
+    "default_path": "tower.gcode",
+    "level_count": 10,
+    "level_height": "13.500",
+    "special_heights[0]": "16.201",
+    "temperature_step": 5,
+    "max_z_build_movement": "1.20",
+    "min_temperature": "190",
+    "max_temperature": "205"
+}

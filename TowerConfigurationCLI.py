@@ -7,6 +7,16 @@ temperature tower.
 Copyright (C) 2019  Jake "Poikilos" Gustafson
 '''
 
+import os
+import sys
+import threading
+from gcodefollower import (
+    GCodeFollower,
+    GCodeFollowerArgParser,
+)
+# import tk_cli_dummy as tk  # This is for synchronizing code between
+#                            # CLI and non-CLI versions.
+
 '''
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -21,18 +31,9 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 '''
-import os
-import sys
-import threading
-from gcodefollower import (
-    GCodeFollower,
-    GCodeFollowerArgParser,
-)
-# import tk_cli_dummy as tk  # This is for synchronizing code between
-#                            # CLI and non-CLI versions.
-
 gcode = None
 runParams = None
+
 
 def usage():
     print(GCodeFollower.getDocumentation())
@@ -64,7 +65,8 @@ class Application():
             gcode.setRangeVar('temperature', 0, runParams.temperatures[0])
             gcode.setRangeVar('temperature', 1, runParams.temperatures[1])
             if runParams.template_gcode_path is not None:
-                gcode.setVar('template_gcode_path', runParams.template_gcode_path)
+                gcode.setVar('template_gcode_path',
+                             runParams.template_gcode_path)
 
             gcode.checkSettings()
             # - Even if it returns True, don't save settings yet, since
