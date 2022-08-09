@@ -13,6 +13,8 @@ import threading
 from gcodefollower import (
     GCodeFollower,
     GCodeFollowerArgParser,
+    echo0,
+    echo1,
 )
 # import tk_cli_dummy as tk  # This is for synchronizing code between
 #                            # CLI and non-CLI versions.
@@ -49,13 +51,17 @@ def usage():
 
 class Application():
     def __init__(self):
+        self.generateTimer = None
+
+    def run(self):
         global gcode
         gcode = GCodeFollower(echo_callback=self.echo,
                               enable_ui_callback=self.enableUI,
                               verbose=runParams.verbose)
 
         gcode.saveDocumentationOnce()
-        self.generateTimer = None
+        if self.generateTimer is not None:
+            raise RuntimeError("Call `run` only once per Application.")
         try:
             # usage()  # for debug only
             if runParams.temperatures is None:
@@ -68,9 +74,13 @@ class Application():
                 gcode.setVar('template_gcode_path',
                              runParams.template_gcode_path)
 
-            gcode.checkSettings()
+            ok, err = gcode.checkSettings()
+            if err is not None:
+                self.echo(err)
             # - Even if it returns True, don't save settings yet, since
             #   gcode.generateTower will do that.
+            if not ok:
+                return 1
         except ValueError:
             usage()
             print("")
@@ -78,7 +88,7 @@ class Application():
             print("- You must specify the temperature range.")
             if not os.path.isfile(gcode._settingsPath):
                 gcode.saveSettings()
-            exit(1)
+            return 2
         except FileNotFoundError:
             # self.echo("")
             # checkSettings already called echo_callback in this case.
@@ -95,8 +105,8 @@ class Application():
             print("")
             if not os.path.isfile(gcode._settingsPath):
                 gcode.saveSettings()
-            exit(1)
-        self.generateTower()
+            return 3
+        return self.generateTower()
 
     def enableUI(self, enable):
         if enable:
@@ -119,6 +129,7 @@ class Application():
         # occur before processing.
         self.generateTimer = threading.Timer(0.01, gcode.generateTower)
         self.generateTimer.start()
+        return 0
 
 
 def main():
@@ -129,12 +140,17 @@ def main():
     if runParams.help:
         gcode = GCodeFollower()  # Initialize the help system.
         usage()
-        sys.exit(0)
-    Application()
+        return 0
+    app = Application()
+    echo0("* scheduling")
+    code = app.run()
+    if code == 0:
+        echo0("* done scheduled tasks")
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 
 # References
 # Urban, M., & Murach, J. (2016). Murach’s Python Programming

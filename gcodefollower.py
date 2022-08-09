@@ -284,9 +284,10 @@ class GCodeFollowerArgParser():
         '''
         This uses sys.argv! See usage for documentation.
         '''
+        global verbosity
+        self.verbose = False if verbosity < 1 else True
         self.temperatures = None
         self.template_gcode_path = None
-        self.verbose = False
         self.help = False
         seqArgs = []
 
@@ -323,6 +324,9 @@ class GCodeFollower:
     '''
 
     Public properties:
+    desired_temperatures -- The user wants this list temperatures. It
+        usually differs from the number of levels in the tower.
+
     emuState --  Gather and store the projected state of the hardware.
         The state is reset on _generateTower since it calls
         resetEmuState.
@@ -457,15 +461,14 @@ class GCodeFollower:
         self.resetEmuState()
         # self._insert_msg = "; GCodeFollower."
         self.dirStep = None
-        self.max_temperature = None  # checkSettings sets this.
-        self.min_temperature = None  # checkSettings sets this.
-        self.heights = None  # checkSettings sets this.
-        self.temperatures = None  # checkSettings sets this.
-        self.desired_temperatures = None  # checkSettings sets this.
-        #                                 # The user wants this list
-        #                                 # temperatures. It usually
-        #                                 # differs from the number of
-        #                                 # levels in the tower.
+
+        # region checkSettings sets this.
+        self.max_temperature = None
+        self.min_temperature = None
+        self.heights = None
+        self.temperatures = None
+        self.desired_temperatures = None
+        # endregion checkSettings sets this.
 
         if echo_callback is not None:
             self.echo = echo_callback
@@ -855,9 +858,15 @@ class GCodeFollower:
 
     def checkSettings(self):
         """
-        This ensures that everything in the settings dictionary is
+
+        Ensure that everything in the settings dictionary is
         correct. Call self.enableUI(True) if it fails, since this is
         not guaranteed to do that.
+
+        Before calling this, set self.echo or set echo_callback using
+        the constructor if you want messages to be shown back to the
+        caller.
+
         The following are the values checked:
         template_gcode_path -- If None, default_path is used.
         temperature -- This must be a list of 2 temperatures, otherwise
@@ -869,6 +878,7 @@ class GCodeFollower:
           present or not set properly.
         - raise FileNotFoundError if src_path is missing.
 
+        Returns: a tuple (is_good, err_or_None).
         """
         verbose = self._verbose
         getV = self.getVar
@@ -881,14 +891,10 @@ class GCodeFollower:
                     ''.format(encVal(getV("template_gcode_path")))
                 )
         else:
-            self.setVar("template_gcode_path",
-                        getV("default_path"))
+            self.setVar("template_gcode_path", getV("default_path"))
             if verbose:
-                print(
-                    '* checking for {}...'.format(
-                        encVal(getV("template_gcode_path")),
-                    )
-                )
+                print('* checking for {}...'
+                      ''.format(encVal(getV("template_gcode_path"))))
                 print("")
 
         notePath = getV("template_gcode_path") + " is missing.txt"
@@ -921,13 +927,13 @@ class GCodeFollower:
                     notePathMsg = (" Writing '" +
                                    os.path.abspath(notePath)
                                    + "' failed: " + exMessage)
-            if verbose:
-                self.echo(msg + notePathMsg)
+            # if verbose:
+            self.echo(msg + notePathMsg)
             if verbose:
                 print("")
             self.enableUI(True)
             raise FileNotFoundError(msg + notePathMsg)
-            return False
+            # return False, msg + notePathMsg
         else:
             if os.path.isfile(notePath):
                 os.remove(notePath)
@@ -1078,7 +1084,7 @@ class GCodeFollower:
                                        temps,
                                        getV("temperature_step"),
                                        len(self.heights)))
-        return True
+        return True, None
 
     def getRangeString(self, name):
         temps = self.getRangeVars(name)
@@ -1469,7 +1475,8 @@ class GCodeFollower:
         previous_src_line = None
         line_number = -1
         try:
-            if not self.checkSettings():
+            ok, err = self.checkSettings()
+            if not ok:
                 self.enableUI(True)
                 return False
             else:

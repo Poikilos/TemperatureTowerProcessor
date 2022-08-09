@@ -26,7 +26,7 @@ except ImportError as ex2:
               " Try installing python-tk or python3-tk")
         print()
         print()
-        exit(1)
+        sys.exit(1)
 
 from gcodefollower import (
     GCodeFollower,
@@ -122,8 +122,11 @@ class ConfigurationFrame(ttk.Frame):
         for child in self.winfo_children():
             child.grid_configure(padx=6, pady=3)
         # (Urban & Murach, 2016, p. 515)
-        if not self.checkSettingsAndShow():
-            print("^ Ignore settings errors above unless trying to"
+        ok, err = self.checkSettingsAndShow()
+        if err is not None:
+            echo0("Error: {}".format(err))
+        if not ok:
+            echo0("^ Ignore settings errors above unless trying to"
                   " run non-interactively, because the error"
                   " occurred on startup.")
 
@@ -133,6 +136,13 @@ class ConfigurationFrame(ttk.Frame):
         self.statusV.set("")
 
     def checkSettingsAndShow(self):
+        '''
+
+        Returns:
+        a tuple (is_good, error_message). See also GCodeFollower's
+        checkSettings documentation.
+        '''
+        msg = None
         try:
             echo1(
                 "* template_gcode_path: {} in {}"
@@ -146,15 +156,18 @@ class ConfigurationFrame(ttk.Frame):
             # gcode.generateTower will do that.
         except ValueError as ex:
             self.enableUI(True)
-            self.echo("The temperatures must be integers or Generate"
-                      " cannot proceed:")
+            msg = ("The temperatures must be integers or Generate"
+                   " cannot proceed:")
+            self.echo()
             self.echo("- {}".format(ex))
         except FileNotFoundError:
             self.enableUI(True)
-            # self.echo("")
-            # checkSettings already called echo_callback in this case.
-            pass
-        return False
+            msg = ("* FileNotFoundError: checkSettings should have already"
+                   "  called echo_callback above in this case.")
+            # self.echo(msg)
+            msg = None
+            # ^ Ignore msg since echo_callback should already have run
+        return False, msg
 
     def pushSettings(self):
         echo1("* setting ranged vars:")
@@ -193,6 +206,7 @@ class ConfigurationFrame(ttk.Frame):
         self.generateButton.config(state=state)
 
     def generateTower(self):
+        global gcode
         self.pushSettings()
         gcode.enableUI(False)
         # ^ generateTower MUST call enable_ui_callback(true) even if
@@ -200,12 +214,26 @@ class ConfigurationFrame(ttk.Frame):
 
         # Start a thread, so that events related to enableUI(False) can
         # occur before processing.
-        if self.checkSettingsAndShow():
-            self.generateTimer = threading.Timer(0.01,
-                                                 gcode.generateTower)
+        ok, err = self.checkSettingsAndShow()
+        if ok:
+            self.generateTimer = threading.Timer(0.01, self._generateTower)
             self.generateTimer.start()
         else:
             self.enableUI(True)
+        if err is not None:
+            self.echo(err)
+        if gcode.error is not None:
+            self.echo(gcode.error)
+            gcode.error = None
+
+    def _generateTower(self):
+        try:
+            echo0("Calling gcode.generateTower...")
+            gcode.generateTower()
+        except Exception as ex:
+            self.echo(str(ex))
+            raise ex
+        echo0("Done")
 
 
 def main():
@@ -218,7 +246,7 @@ def main():
     if runParams.help:
         gcode = GCodeFollower()  # Initialize the help system.
         usage()
-        sys.exit(0)
+        return 0
     frame = ConfigurationFrame(root)
 
     if runParams.template_gcode_path is not None:
@@ -234,10 +262,11 @@ def main():
 
     root.mainloop()
     # (Urban & Murach, 2016, p. 515)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 
 # References
 # Urban, M., & Murach, J. (2016). Murach's Python Programming
