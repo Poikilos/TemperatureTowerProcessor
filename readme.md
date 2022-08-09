@@ -6,6 +6,14 @@ Sourcecode: https://github.com/poikilos/TemperatureTowerProcessor
 To test different retraction lengths you can try: https://github.com/poikilos/RetractionTowerProcessor
 
 
+## Configurable Compact Temperature Calibration Tower
+based on "Smart compact temperature calibration tower"
+
+### Differences in Poikilos' remix
+- Make a tower without numbers so that gcode can be processed in one step using my TemperatureTowerProcessor GUI.
+- Make the base larger as a heat shield for soft materials requiring cooling.
+
+
 ## Requirements
 - When installing Python on Windows, ensure that the **add to PATH** option is checked during install. Then open set_temperatures.pyw with "C:\Program Files (x86)\Python 3\pythonw" or whatever your "pythonw.exe" is (some versions install to C:\Python3*).
 
@@ -18,14 +26,6 @@ To test different retraction lengths you can try: https://github.com/poikilos/Re
 - Click the "Generate" button.
 - A new gcode file should appear, automatically named containing the temperature range you specified. 3D print that file.
   - You will usually get an "INFO" message saying that only a certain number of levels will be present. That is expected. The top of the tower will have a hole, but that is normal. The program doesn't manipulate the gcode, other than changing and inserting temperatures and removing commands past the level you need.
-
-
-## Configurable Compact Temperature Calibration Tower
-based on "Smart compact temperature calibration tower"
-
-### Differences in Poikilos' remix
-- Make a tower without numbers so that it can be configured in one step (after you have gcode) using my TemperatureTowerProcessor GUI
-- Make the base larger as a heat shield for soft materials requiring cooling.
 
 
 ## Custom Tower
@@ -41,14 +41,17 @@ based on "Smart compact temperature calibration tower"
 - Code:
   - GPLv3
   - Author: Poikilos
+- Smart compact temperature calibration tower:
+  - [Creative Commons Attribution-ShareAlike 3.0 Unported](https://creativecommons.org/licenses/by-sa/3.0/) (CC BY-SA 3.0)
+  - by gaaZolee and Poikilos
+  - based on [Smart compact temperature calibration tower](https://www.thingiverse.com/thing:2729076) by [gaaZolee](https://www.thingiverse.com/gaaZolee) December 24, 2017
 - ConfigurableTempTower (unused):
   - [Creative Commons Attribution 3.0 Unported](http://creativecommons.org/licenses/by/3.0/) (CC BY 3.0)
   - Authors: [Poikilos](https://www.thingiverse.com/poikilos), [3dMakernoob](https://www.thingiverse.com/3dMakernoob), [bjorntm](https://www.thingiverse.com/bjorntm)
   - based on [Temperature Tower Generic](http://www.thingiverse.com/thing:2092820) by [3dMakernoob](https://www.thingiverse.com/3dMakernoob)
 - Everything else:
   - [Creative Commons Attribution-ShareAlike 3.0 Unported](https://creativecommons.org/licenses/by-sa/3.0/) (CC BY-SA 3.0)
-  - by gaaZolee and Poikilos
-  - based on [Smart compact temperature calibration tower](https://www.thingiverse.com/thing:2729076) by [gaaZolee](https://www.thingiverse.com/gaaZolee) December 24, 2017
+  - Authors: [Poikilos](https://www.thingiverse.com/poikilos)
 
 
 ## History
