@@ -11,7 +11,7 @@ based on "Smart compact temperature calibration tower"
 
 ### Differences in Poikilos' remix
 - Make a tower without numbers so that gcode can be processed in one step using my TemperatureTowerProcessor GUI.
-- Make the base larger as a heat shield for soft materials requiring cooling.
+- Make the base larger and thicker as a heat shield for soft materials requiring cooling (This requires infill not solid so trapped air is in the insulator pad).
 
 
 ## Requirements

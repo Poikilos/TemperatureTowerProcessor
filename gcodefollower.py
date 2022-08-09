@@ -425,7 +425,7 @@ class GCodeFollower:
                         "The height of each level excluding levels"
                         " (special_heights can override this for"
                         " individual levels of the tower).")
-        self._createVar("special_heights[0]", "11.4", "Decimal",
+        self._createVar("special_heights[0]", "12.8", "Decimal",
                         "This is the height of the first floor and any"
                         " other floors that don't match level_height"
                         " (must be consecutive).")

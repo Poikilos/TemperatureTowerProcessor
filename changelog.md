@@ -3,6 +3,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+
+## [git] - 2022-08-08
+### Changed
+- Make the base thicker (now 2.8 mm) and even larger so it blocks heat (if air is inside using low infill).
+
+
 ## [git] - 2022-08-07
 ### Added
 - Load settings on GUI start.
