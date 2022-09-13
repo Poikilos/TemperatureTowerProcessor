@@ -158,6 +158,59 @@ def encVal(v):
     return str(v)
 
 
+def modify_cmd_meta(meta, key, value):
+    for pair in meta:
+        if pair[0] != key:
+            continue
+        if len(pair) < 2:
+            raise ValueError(
+                "The key has no param in the original command `{}`,"
+                " so the key '{}' was left unchanged for safety."
+                "".format(cmd, key)
+            )
+        if isinstance(value, float) or isinstance(value, Decimal):
+            pair[1] = "{:.3f}".format(value)
+        else:
+            pair[1] = "{}".format(value)
+        return True
+    return False
+
+
+def meta_to_cmd(meta):
+    '''
+    Transform a list of key-value pairs (2-long tuples or lists) into a
+    single g-code command string.
+    '''
+    result = ""
+    prefix = ""
+    for pair in meta:
+        result += prefix
+        if len(pair) != 2:
+            raise ValueError(
+                "Each list in meta from get_cmd_meta should be a pair,"
+                " but there is a different number of parts in: {}"
+                "".format(pair)
+            )
+        for part in pair:
+            result += "{}".format(part)
+        prefix = " "
+    return result
+
+
+def changed_cmd(cmd, key, value):
+    '''
+    Parse the g-code command and after key, change the number to value.
+    If value is a float or decimal, format it to 3 places. Otherwise,
+    format it directly (assume it is a string with the correct number
+    of decimal places or an int that should have no decimal places).
+    '''
+    meta = get_cmd_meta(cmd)
+    result = modify_cmd_meta(meta, key, value)
+    if not result:
+        return cmd
+    return meta_to_cmd(meta)
+
+
 def get_cmd_meta(cmd):
     '''
     Parse the g-code command to a set of lists such as:
