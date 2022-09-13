@@ -102,7 +102,10 @@ def usage():
     print("")
 
 
-def round_nearest(x):
+python_round = round
+
+
+def round_nearest(*args):
     '''
     This function circumvents the new Python 3 behavior where round uses
     "banker's rounding" to "limit the accumulation of errors when
@@ -120,9 +123,28 @@ def round_nearest(x):
     <https://stackoverflow.com/a/58839239> on
     <https://stackoverflow.com/questions/58838995/how-to-switch-off-
     bankers-rounding-in-python>.
+
+    However, this version skips the procedure if a second sequential
+    argument is given.
+
+    Sequential arguments:
+    value -- a float value to round.
+    precision (optional) -- the number of decimal places to keep (uses
+        Python's builtin round function which uses banker's rounding in
+        Python 3). If not provided, value is rounded to a whole number
+        manually (without Python's builtin round function).
     '''
-    i, f = divmod(x, 1)
-    return int(i + ((f >= 0.5) if (x > 0) else (f > 0.5)))
+    if len(args) == 1:
+        i, f = divmod(x, 1)
+        return int(i + ((f >= 0.5) if (x > 0) else (f > 0.5)))
+    elif len(args) == 2:
+        precision = args[1]
+        return python_round(args[0], precision)
+    else:
+        ValueError(
+            "round_nearest only takes 1 or 2 arguments:"
+            " (value [, precision])"
+        )
 
 
 round = round_nearest
@@ -158,7 +180,7 @@ def encVal(v):
     return str(v)
 
 
-def modify_cmd_meta(meta, key, value):
+def modify_cmd_meta(meta, key, value, precision=5):
     for pair in meta:
         if pair[0] != key:
             continue
@@ -169,7 +191,8 @@ def modify_cmd_meta(meta, key, value):
                 "".format(cmd, key)
             )
         if isinstance(value, float) or isinstance(value, Decimal):
-            pair[1] = "{:.3f}".format(value)
+            decimal_format = "{:."+str(precision)+"f}"
+            pair[1] = decimal_format.format(round(value, precision))
         else:
             pair[1] = "{}".format(value)
         return True
