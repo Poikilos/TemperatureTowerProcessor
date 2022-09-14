@@ -102,7 +102,43 @@ def usage():
     print("")
 
 
+def show_fewest(n):
+    '''
+    Display only decimal places that are not 0.
+
+    Sequential arguments:
+    n -- a float/Decimal value.
+    '''
+    s = "{}".format(n)
+    while s.endswith(".0") or s.endswith("0"):
+        s = s[:-1]
+    return s
+
+
+
 python_round = round
+
+
+def round_nearest_d(*args):
+    '''
+    This is a Decimal version of round_nearest. See round_nearest for
+    documentation.
+    '''
+    if len(args) == 1:
+        x = args[0]
+        i, f = divmod(x, 1)
+        return int(i + ((f >= 0.5) if (x > 0) else (f > 0.5)))
+    elif len(args) == 2:
+        precision = args[1]
+        # return python_round(args[0], precision)
+        multiplier = Decimal(10 ** precision)
+        increased = Decimal(args[0] * multiplier)
+        return Decimal(round_nearest_d(increased)) / Decimal(multiplier)
+    else:
+        ValueError(
+            "round_nearest only takes 1 or 2 arguments:"
+            " (value [, precision])"
+        )
 
 
 def round_nearest(*args):
@@ -135,17 +171,20 @@ def round_nearest(*args):
         manually (without Python's builtin round function).
     '''
     if len(args) == 1:
+        x = args[0]
         i, f = divmod(x, 1)
         return int(i + ((f >= 0.5) if (x > 0) else (f > 0.5)))
     elif len(args) == 2:
         precision = args[1]
-        return python_round(args[0], precision)
+        # return python_round(args[0], precision)
+        multiplier = 10 ** precision
+        increased = args[0] * multiplier
+        return round_nearest(increased) / multiplier
     else:
         ValueError(
             "round_nearest only takes 1 or 2 arguments:"
             " (value [, precision])"
         )
-
 
 round = round_nearest
 
@@ -191,8 +230,10 @@ def modify_cmd_meta(meta, key, value, precision=5):
                 "".format(cmd, key)
             )
         if isinstance(value, float) or isinstance(value, Decimal):
-            decimal_format = "{:."+str(precision)+"f}"
-            pair[1] = decimal_format.format(round(value, precision))
+            # decimal_format = "{:."+str(precision)+"f}"
+            # pair[1] = decimal_format.format(round(value, precision))
+            pair[1] = show_fewest(round(value, precision))
+            # pair[1] = show_fewest(value)
         else:
             pair[1] = "{}".format(value)
         return True
@@ -220,15 +261,17 @@ def meta_to_cmd(meta):
     return result
 
 
-def changed_cmd(cmd, key, value):
+def changed_cmd(cmd, key, value, precision=5):
     '''
     Parse the g-code command and after key, change the number to value.
-    If value is a float or decimal, format it to 3 places. Otherwise,
-    format it directly (assume it is a string with the correct number
-    of decimal places or an int that should have no decimal places).
+    If value is a float or decimal, format it to the number of places
+    specified by precision.
+    Otherwise, format it directly (assume it is a string with the
+    correct number of decimal places or an int that should have no
+    decimal places).
     '''
     meta = get_cmd_meta(cmd)
-    result = modify_cmd_meta(meta, key, value)
+    result = modify_cmd_meta(meta, key, value, precision=precision)
     if not result:
         return cmd
     return meta_to_cmd(meta)
