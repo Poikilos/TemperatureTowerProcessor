@@ -5,6 +5,10 @@ Sourcecode: https://github.com/poikilos/TemperatureTowerProcessor
 
 To test different retraction lengths you can try: https://github.com/poikilos/RetractionTowerProcessor
 
+You can calibrate further using my related projects:
+- [LinearAdvanceTowerGenerator](https://github.com/poikilos/LinearAdvanceTowerGenerator)
+- [RetractionTowerProcessor](https://github.com/poikilos/RetractionTowerProcessor)
+
 
 ## Configurable Compact Temperature Calibration Tower
 based on "Smart compact temperature calibration tower"
