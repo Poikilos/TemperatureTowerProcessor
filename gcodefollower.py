@@ -116,6 +116,14 @@ def show_fewest(n):
 
 
 
+def round_up(n, decimals=0):
+    # See <https://realpython.com/python-rounding/
+    #   #:~:text=To%20implement%20the%20%E2%80%9Crounding%20up,
+    #   equal%20to%20a%20given%20number.>
+    multiplier = 10 ** decimals
+    return math.ceil(n * multiplier) / multiplier
+
+
 python_round = round
 
 
