@@ -56,7 +56,7 @@ verbosity = 0
 for argI in range(1, len(sys.argv)):
     arg = sys.argv[argI]
     if arg.startswith("--"):
-        if arg == "--verbosity":
+        if arg == "--verbose":
             verbosity = 1
         elif arg == "--debug":
             verbosity = 2
@@ -137,10 +137,17 @@ def round_nearest_d(*args):
         i, f = divmod(x, 1)
         return int(i + ((f >= 0.5) if (x > 0) else (f > 0.5)))
     elif len(args) == 2:
+        if not isinstance(args[1], int):
+            raise TypeError("precision must be an int.")
         precision = args[1]
         # return python_round(args[0], precision)
         multiplier = Decimal(10 ** precision)
-        increased = Decimal(args[0] * multiplier)
+        x = args[0]
+        if isinstance(x, float):
+            x = Decimal(x)
+        if not isinstance(x, Decimal):
+            raise TypeError("The value must be a float or Decimal.")
+        increased = Decimal(x * multiplier)
         return Decimal(round_nearest_d(increased)) / Decimal(multiplier)
     else:
         ValueError(
@@ -184,6 +191,8 @@ def round_nearest(*args):
         return int(i + ((f >= 0.5) if (x > 0) else (f > 0.5)))
     elif len(args) == 2:
         precision = args[1]
+        if not isinstance(args[1], int):
+            raise ValueError("precision must be an int.")
         # return python_round(args[0], precision)
         multiplier = 10 ** precision
         increased = args[0] * multiplier
