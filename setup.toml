@@ -32,3 +32,5 @@ dynamic = ["version"]
 [project.scripts]
 TowerConfigurationCLI = "gcodefollower.temperature:main"
 TowerConfiguration = "gcodefollower.temperaturegui:main"
+resize-all = "gcodefollower.gcfmesh:main"
+# ^ originally from Poikilos' remix of [Pathfinder 2e Condition Rings](https://www.thingiverse.com/thing:4097267)
