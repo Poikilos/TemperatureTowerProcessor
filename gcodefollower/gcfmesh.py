@@ -3,7 +3,17 @@
 If run as a script, this *permanently* resizes *all* stl files in the
 *current working directory*!
 
-This requires the flatpak version of PrusaSlicer for now.
+This is only tested with PrusaSlicer in known GNU/Linux system paths.
+
+Command-Line Interface (CLI) usage:
+resize-all <scale>
+
+Example:
+cd directory_of_stl_files_to_change_PERMANENTLY
+# To convert a 20.2 width to 25.5, use the result of (25.4+.1)/20.2
+# as follows:
+python resize-all.py 1.26237623752376
+
 '''
 import sys
 import os
@@ -11,11 +21,27 @@ import shlex
 import subprocess
 import shutil
 
-SLICER = "/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=entrypoint --file-forwarding com.prusa3d.PrusaSlicer"
-
 
 def echo0(*args):
     print(*args, file=sys.stderr)
+
+
+SLICER = "/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=entrypoint --file-forwarding com.prusa3d.PrusaSlicer"
+paths = os.environ['PATH'].split(os.pathsep)
+prusaslicer_paths = [os.path.join(path, "prusa-slicer") for path in paths]
+slic3r_paths = [os.path.join(path, "slic3r") for path in paths]
+try_paths = prusaslicer_paths + slic3r_paths
+
+for try_path in try_paths:
+    if os.path.isfile(try_path):
+        if "prusa" not in try_path:
+            echo0("[gcfmesh] Warning: scale_mesh"
+                  " is only tested with PrusaSlicer"
+                  " but it was not found at any of the following locations:"
+                  " {}"
+                  "".format(prusaslicer_paths))
+        SLICER = try_path
+        break
 
 
 def scale_mesh(old_path, new_path, scale):
@@ -67,9 +93,17 @@ def resize_all(scale, parent, destination=os.getcwd()):
     return 0
 
 
+def usage():
+    echo0(__doc__)
+
+
 def main():
     ROOT=".."
-    return resize_all((25.4+.1)/20.2, ROOT)
+    if len(sys.argv) < 2:
+        usage()
+        echo0("Error: You must specify a scale.")
+        return 1
+    return resize_all(float(sys.argv[1]), ROOT)
 
 
 if __name__ == "__main__":
