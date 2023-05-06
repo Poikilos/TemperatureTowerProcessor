@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gcodefollower"
+authors = [
+    {name = "Jake Gustafson", email = "7557867+poikilos@users.noreply.github.com"},
+]
+description = "Read and process G-code. Make G-code into a temperature tower."
+readme = "readme.md"
+requires-python = ">=3.7"
+keywords = ["G-code", "gcode", "slicer", "3DPrinting"]
+license = {text = "GPL-3.0-only"}
+# ^ for strings, see https://peps.python.org/pep-0639/
+license_files = ["license.txt", "LICENSE.txt", "LICEN[CS]E*", "COPYING*"]
+classifiers = [
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Programming Language :: Python :: 3",
+    "Development Status :: 5 - Production/Stable",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+]
+# dependencies = [
+#     "requests",
+#     'importlib-metadata; python_version<"3.8"',
+# ]
+dynamic = ["version"]
+
+# [project.optional-dependencies]
+# pdf = ["ReportLab>=1.2", "RXP"]
+
+[project.scripts]
+TowerConfigurationCLI = "gcodefollower.temperature:main"
+TowerConfiguration = "gcodefollower.temperaturegui:main"
